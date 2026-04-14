@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
-import { formatCurrency } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import {
   Users,
   GraduationCap,
@@ -20,7 +20,7 @@ import {
   Ban,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -471,11 +471,12 @@ export default function DashboardPage() {
                           ))}
                           {alerts.lowAttendanceCount > 10 && (
                             <StaggerItem>
-                              <Button variant="ghost" size="sm" className="w-full" asChild>
-                                <a href="/attendance">
-                                  View all {alerts.lowAttendanceCount} students
-                                </a>
-                              </Button>
+                              <a
+                                href="/attendance"
+                                className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full')}
+                              >
+                                View all {alerts.lowAttendanceCount} students
+                              </a>
                             </StaggerItem>
                           )}
                         </StaggerContainer>
@@ -510,11 +511,12 @@ export default function DashboardPage() {
                           ))}
                           {alerts.overdueCount > 10 && (
                             <StaggerItem>
-                              <Button variant="ghost" size="sm" className="w-full" asChild>
-                                <a href="/fees">
-                                  View all {alerts.overdueCount} students
-                                </a>
-                              </Button>
+                              <a
+                                href="/fees"
+                                className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full')}
+                              >
+                                View all {alerts.overdueCount} students
+                              </a>
                             </StaggerItem>
                           )}
                         </StaggerContainer>
