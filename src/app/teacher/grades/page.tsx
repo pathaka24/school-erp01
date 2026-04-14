@@ -12,7 +12,7 @@ export default function TeacherGradesPage() {
   const [selectedExam, setSelectedExam] = useState('');
   const [selectedExamSubject, setSelectedExamSubject] = useState('');
   const [students, setStudents] = useState<any[]>([]);
-  const [marks, setMarks] = useState<Record<string, { marksObtained: number; grade: string; remarks: string }>>({});
+  const [marks, setMarks] = useState<Record<string, { marksObtained: number | string; grade: string; remarks: string }>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -26,7 +26,7 @@ export default function TeacherGradesPage() {
 
   useEffect(() => {
     if (!teacher) return;
-    const classIds = [...new Set(teacher.subjects?.map((s: any) => s.classId) || [])];
+    const classIds = [...new Set<string>(teacher.subjects?.map((s: any) => s.classId) || [])];
     Promise.all(classIds.map((cid: string) => api.get('/exams', { params: { classId: cid } })))
       .then(responses => {
         const all = responses.flatMap(r => r.data);
