@@ -28,7 +28,7 @@ export default function TeacherExamsPage() {
   useEffect(() => {
     if (!teacher) return;
     // Fetch exams for all classes this teacher teaches
-    const classIds = [...new Set(teacher.subjects?.map((s: any) => s.classId) || [])];
+    const classIds = [...new Set<string>(teacher.subjects?.map((s: any) => s.classId) || [])];
     Promise.all(classIds.map((cid: string) => api.get('/exams', { params: { classId: cid } })))
       .then(responses => {
         const all = responses.flatMap(r => r.data);
@@ -60,7 +60,7 @@ export default function TeacherExamsPage() {
       setShowForm(false);
       setForm({ name: '', type: 'UNIT_TEST', classId: '', startDate: '', endDate: '', subjects: [] });
       // Refresh
-      const classIds = [...new Set(teacher.subjects?.map((s: any) => s.classId) || [])];
+      const classIds = [...new Set<string>(teacher.subjects?.map((s: any) => s.classId) || [])];
       const responses = await Promise.all(classIds.map((cid: string) => api.get('/exams', { params: { classId: cid } })));
       const all = responses.flatMap(r => r.data);
       setExams(Array.from(new Map(all.map((e: any) => [e.id, e])).values()));
