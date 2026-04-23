@@ -114,12 +114,15 @@ export default function ImportStudentsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState('');
+  const [feePlan, setFeePlan] = useState<any>(null);
+  const [applyClassCharges, setApplyClassCharges] = useState(true);
 
   useEffect(() => {
-    api.get('/classes').then(r => {
-      setClasses(r.data);
+    Promise.all([api.get('/classes'), api.get('/settings/fee-plan')]).then(([classesRes, feePlanRes]) => {
+      setClasses(classesRes.data);
+      setFeePlan(feePlanRes.data);
       // Default to Class 1 + Section A
-      const class1 = r.data.find((c: any) => c.name === 'Class 1' || c.numericGrade === 1);
+      const class1 = classesRes.data.find((c: any) => c.name === 'Class 1' || c.numericGrade === 1);
       if (class1) {
         setClassId(class1.id);
         const secA = class1.sections?.find((s: any) => s.name === 'A');
@@ -128,6 +131,10 @@ export default function ImportStudentsPage() {
       }
     });
   }, []);
+
+  const classPlan = feePlan?.classes?.find((c: any) => c.classId === classId);
+  const presetCharges = (classPlan?.charges || []).filter((c: any) => (parseFloat(c.amount) || 0) > 0);
+  const presetTotal = presetCharges.reduce((s: number, c: any) => s + (parseFloat(c.amount) || 0), 0);
 
   const selectedClass = classes.find(c => c.id === classId);
   const sections = selectedClass?.sections || [];
@@ -203,6 +210,7 @@ export default function ImportStudentsPage() {
     try {
       const { data } = await api.post('/students/import', {
         classId, sectionId,
+        applyClassCharges,
         rows: parsed.map(r => ({
           firstName: r.firstName,
           lastName: r.lastName,
@@ -340,9 +348,55 @@ export default function ImportStudentsPage() {
             </Card>
           </FadeIn>
 
+          <FadeIn delay={0.15}>
+            <Card>
+              <CardHeader><CardTitle>2. Admission Charges</CardTitle></CardHeader>
+              <CardContent>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" checked={applyClassCharges} onChange={e => setApplyClassCharges(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                  <div>
+                    <span className="text-sm font-medium text-slate-900">Auto-apply class admission charges to each student</span>
+                    <p className="text-xs text-slate-500 mt-0.5">Creates fee ledger entries for dress, tie/belt, books, copy, dairy, admission charge, annual, registration etc. based on the Annual Fee Plan for the selected class.</p>
+                  </div>
+                </label>
+
+                {applyClassCharges && classId && (
+                  <div className="mt-4">
+                    {presetCharges.length > 0 ? (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-sm font-semibold text-blue-900">Each student will be charged</p>
+                          <p className="text-2xl font-bold text-blue-800">₹{presetTotal.toLocaleString('en-IN')}</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                          {presetCharges.map((c: any, i: number) => (
+                            <div key={i} className="flex justify-between text-xs bg-white rounded px-2.5 py-1.5">
+                              <span className="text-slate-600">{c.description}</span>
+                              <span className="font-semibold text-slate-900">₹{parseFloat(c.amount).toLocaleString('en-IN')}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {parsed.length > 0 && (
+                          <p className="text-xs text-blue-700 mt-3">
+                            Total across {parsed.length} students: <strong>₹{(presetTotal * parsed.length).toLocaleString('en-IN')}</strong>
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-700">
+                        No charges defined for this class. Set them in <button onClick={() => router.push('/settings')} className="underline font-medium">Settings → Annual Fee Plan</button>, or uncheck to skip.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </FadeIn>
+
           <FadeIn delay={0.2}>
             <Card>
-              <CardHeader><CardTitle>2. Upload File</CardTitle></CardHeader>
+              <CardHeader><CardTitle>3. Upload File</CardTitle></CardHeader>
               <CardContent>
                 <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-blue-400 transition"
                   onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('border-blue-500', 'bg-blue-50'); }}
@@ -385,7 +439,7 @@ export default function ImportStudentsPage() {
               <Card>
                 <CardHeader>
                   <div className="flex items-center justify-between">
-                    <CardTitle>3. Preview ({parsed.length} rows)</CardTitle>
+                    <CardTitle>4. Preview ({parsed.length} rows)</CardTitle>
                     <Button onClick={handleCommit} disabled={submitting || !classId || !sectionId}>
                       {submitting ? 'Importing...' : `Import ${parsed.length} students`}
                     </Button>

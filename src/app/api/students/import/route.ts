@@ -53,7 +53,9 @@ function normalizeGender(value: string | undefined): Gender {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { classId, sectionId, rows } = body as { classId: string; sectionId: string; rows: ImportRow[] };
+  const { classId, sectionId, rows, applyClassCharges } = body as {
+    classId: string; sectionId: string; rows: ImportRow[]; applyClassCharges?: boolean;
+  };
 
   if (!classId || !sectionId) {
     return Response.json({ error: 'classId and sectionId are required' }, { status: 400 });
@@ -69,6 +71,25 @@ export async function POST(request: NextRequest) {
   ]);
   if (!cls) return Response.json({ error: 'Class not found' }, { status: 404 });
   if (!sec) return Response.json({ error: 'Section not found' }, { status: 404 });
+
+  // Load the class's admission charges from the fee plan (for auto-apply)
+  let presetCharges: { category: string; description: string; amount: number }[] = [];
+  if (applyClassCharges) {
+    const feePlanSetting = await prisma.schoolSettings.findUnique({ where: { key: 'feePlan' } });
+    if (feePlanSetting) {
+      try {
+        const plan = JSON.parse(feePlanSetting.value);
+        const classPlan = plan?.classes?.find((c: any) => c.classId === classId);
+        presetCharges = (classPlan?.charges || [])
+          .filter((c: any) => (parseFloat(c.amount) || 0) > 0)
+          .map((c: any) => ({
+            category: c.category || 'AD_HOC',
+            description: c.description || String(c.category || 'Charge').replace(/_/g, ' '),
+            amount: parseFloat(c.amount),
+          }));
+      } catch {}
+    }
+  }
 
   // Get next admission number base
   const currentYear = new Date().getFullYear();
@@ -132,6 +153,28 @@ export async function POST(request: NextRequest) {
         },
         select: { id: true, admissionNo: true, user: { select: { firstName: true, lastName: true } } },
       });
+      // Auto-apply class admission charges as FeeLedger entries
+      if (presetCharges.length > 0) {
+        const now = new Date();
+        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        let balance = 0;
+        for (const charge of presetCharges) {
+          balance += charge.amount;
+          await prisma.feeLedger.create({
+            data: {
+              studentId: student.id,
+              date: now,
+              month: currentMonth,
+              type: 'CHARGE',
+              category: charge.category,
+              description: charge.description,
+              amount: charge.amount,
+              balanceAfter: balance,
+            },
+          });
+        }
+      }
+
       created.push({
         rowIndex: i,
         admissionNo: student.admissionNo,
