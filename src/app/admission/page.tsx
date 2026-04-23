@@ -121,7 +121,7 @@ export default function AdmissionPage() {
   const balanceAfterDeposit = chargesTotal - depositAmount;
 
   const canProceed = () => {
-    if (step === 0) return form.firstName && form.lastName && form.dateOfBirth && form.gender && form.classId && form.sectionId;
+    if (step === 0) return form.firstName && form.dateOfBirth && form.gender && form.classId && form.sectionId;
     return true;
   };
 
@@ -275,7 +275,7 @@ export default function AdmissionPage() {
     <div class="card-body">
       <div style="text-align:center;margin-bottom:12px"><span class="adm-badge">${success.admissionNo}</span></div>
       <div class="profile-row">
-        <div class="photo-box">${form.firstName[0]}${form.lastName[0]}</div>
+        <div class="photo-box">${form.firstName[0] || ''}${form.lastName[0] || ''}</div>
         <div class="info-grid">
           <div><div class="label">Name</div><div class="value">${form.firstName} ${form.lastName}</div></div>
           <div><div class="label">Class</div><div class="value">${success.class?.name} — ${success.section?.name || ''}</div></div>
@@ -481,7 +481,7 @@ export default function AdmissionPage() {
                 {step === 0 && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <Input label="First Name *" value={form.firstName} onChange={v => u('firstName', v)} />
-                    <Input label="Last Name *" value={form.lastName} onChange={v => u('lastName', v)} />
+                    <Input label="Last Name (optional)" value={form.lastName} onChange={v => u('lastName', v)} />
                     <Input label="Email (auto-generated if empty)" value={form.email} onChange={v => u('email', v)} type="email" placeholder="optional" />
                     <Input label="Phone" value={form.phone} onChange={v => u('phone', v)} />
                     <Input label="Date of Birth *" value={form.dateOfBirth} onChange={v => u('dateOfBirth', v)} type="date" />

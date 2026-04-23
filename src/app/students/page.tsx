@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageTransition, FadeIn, StaggerContainer, StaggerItem, ScaleHover } from '@/components/ui/motion';
-import { Search, Eye, Trash2, ArrowLeft, Users, UserPlus, GraduationCap } from 'lucide-react';
+import { Search, Eye, Trash2, ArrowLeft, Users, UserPlus, GraduationCap, Upload } from 'lucide-react';
 
 const CLASS_COLORS = [
   'from-blue-500 to-blue-600',
@@ -95,9 +95,14 @@ export default function StudentsPage() {
                     <h1 className="text-2xl font-bold text-slate-900">Students</h1>
                     <p className="text-sm text-slate-500">{totalStudents} total students across {classes.length} classes</p>
                   </div>
-                  <Button onClick={() => router.push('/admission')}>
-                    <UserPlus className="h-4 w-4" /> New Admission
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => router.push('/students/import')}>
+                      <Upload className="h-4 w-4" /> Import from Excel/CSV
+                    </Button>
+                    <Button onClick={() => router.push('/admission')}>
+                      <UserPlus className="h-4 w-4" /> New Admission
+                    </Button>
+                  </div>
                 </div>
               </FadeIn>
 

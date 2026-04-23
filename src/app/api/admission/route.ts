@@ -76,8 +76,8 @@ export async function POST(request: NextRequest) {
     siblingAdmissionNo, // string — if sibling exists, link to same family
   } = body;
 
-  if (!firstName || !lastName || !dateOfBirth || !gender || !classId || !sectionId) {
-    return Response.json({ error: 'firstName, lastName, dateOfBirth, gender, classId, and sectionId are required' }, { status: 400 });
+  if (!firstName || !dateOfBirth || !gender || !classId || !sectionId) {
+    return Response.json({ error: 'firstName, dateOfBirth, gender, classId, and sectionId are required' }, { status: 400 });
   }
 
   // Auto-generate admission number
@@ -96,7 +96,8 @@ export async function POST(request: NextRequest) {
   const admissionNo = `${prefix}${String(nextNum).padStart(4, '0')}`;
 
   // Auto-generate email if not provided
-  const studentEmail = email || `${firstName.toLowerCase()}.${lastName.toLowerCase()}.${nextNum}@school.edu`;
+  const emailSlug = [firstName, lastName].filter(Boolean).join('.').toLowerCase() || 'student';
+  const studentEmail = email || `${emailSlug}.${nextNum}@school.edu`;
   const passwordHash = await bcrypt.hash('student123', 12);
 
   try {
@@ -167,7 +168,7 @@ export async function POST(request: NextRequest) {
             email: studentEmail,
             passwordHash,
             firstName,
-            lastName,
+            lastName: lastName || '',
             phone: phone || fatherPhone || null,
             role: Role.STUDENT,
           },

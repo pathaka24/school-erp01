@@ -35,6 +35,7 @@ export default function StudentProfilePage() {
   const [form, setForm] = useState<any>({});
   const [ledgerData, setLedgerData] = useState<any>(null);
   const [ledgerFamily, setLedgerFamily] = useState(false);
+  const [ledgerView, setLedgerView] = useState<'all' | 'purchases'>('all');
   const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
   const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
   const [showDepositForm, setShowDepositForm] = useState(false);
@@ -1407,6 +1408,21 @@ export default function StudentProfilePage() {
                 {ledgerData?.currentBalance <= 0 && <p className="text-sm text-green-600 mt-1">All dues cleared</p>}
               </div>
 
+              {/* View toggle: all ledger vs purchases (admission-kit items) only */}
+              {ledgerData?.entries?.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium text-slate-500 uppercase">View:</span>
+                  <button onClick={() => setLedgerView('all')}
+                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'all' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                    All (Fees & Purchases)
+                  </button>
+                  <button onClick={() => setLedgerView('purchases')}
+                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'purchases' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                    Purchases Only (Dress / Tie / Belt / Books / Copy / Dairy)
+                  </button>
+                </div>
+              )}
+
               {/* Empty ledger — prompt to set opening balance */}
               {!ledgerData?.ledger?.length && (
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-6 text-center">
@@ -1481,7 +1497,7 @@ export default function StudentProfilePage() {
               )}
 
               {/* Ledger table — matches physical register */}
-              {ledgerData?.ledger?.length > 0 && (() => {
+              {ledgerView === 'all' && ledgerData?.ledger?.length > 0 && (() => {
                 // Group by academic year (Apr-Mar)
                 const getAcademicYear = (month: string) => {
                   const [y, m] = month.split('-').map(Number);
@@ -1565,6 +1581,110 @@ export default function StudentProfilePage() {
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                );
+              })()}
+
+              {/* Purchases-only table (admission-kit items: dress, tie/belt, books, copy, dairy) */}
+              {ledgerView === 'purchases' && (() => {
+                const PURCHASE_CATS = ['DRESS', 'TIE_BELT', 'BOOK', 'COPY', 'DAIRY'];
+                const CAT_COLORS: Record<string, string> = {
+                  DRESS: 'bg-pink-100 text-pink-700',
+                  TIE_BELT: 'bg-amber-100 text-amber-700',
+                  BOOK: 'bg-blue-100 text-blue-700',
+                  COPY: 'bg-emerald-100 text-emerald-700',
+                  DAIRY: 'bg-purple-100 text-purple-700',
+                };
+                const purchases = (ledgerData?.entries || []).filter(
+                  (e: any) => e.type === 'CHARGE' && PURCHASE_CATS.includes(e.category)
+                );
+                const total = purchases.reduce((s: number, p: any) => s + p.amount, 0);
+
+                // Breakup by category
+                const breakup: Record<string, { count: number; total: number }> = {};
+                for (const p of purchases) {
+                  if (!breakup[p.category]) breakup[p.category] = { count: 0, total: 0 };
+                  breakup[p.category].count += 1;
+                  breakup[p.category].total += p.amount;
+                }
+
+                const fmtDateTime = (d: string | Date) =>
+                  new Date(d).toLocaleString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', hour12: true,
+                  });
+
+                if (purchases.length === 0) {
+                  return (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
+                      <p className="text-sm text-slate-600">No purchases recorded for this student.</p>
+                      <p className="text-xs text-slate-400 mt-1">Admission-time items (Dress, Tie/Belt, Books, Copy, Dairy) will appear here.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-4">
+                    {/* Category breakup cards */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-700 mb-2">Purchase Breakup</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                        {PURCHASE_CATS.map(cat => {
+                          const b = breakup[cat];
+                          if (!b) return null;
+                          return (
+                            <div key={cat} className="bg-white rounded-xl border border-slate-200 p-3">
+                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${CAT_COLORS[cat]}`}>
+                                {cat.replace(/_/g, ' ')}
+                              </span>
+                              <p className="text-lg font-bold text-slate-900 mt-2">{formatCurrency(b.total)}</p>
+                              <p className="text-xs text-slate-400">{b.count} {b.count === 1 ? 'item' : 'items'}</p>
+                            </div>
+                          );
+                        })}
+                        <div className="bg-orange-50 rounded-xl border border-orange-200 p-3">
+                          <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold text-orange-700 bg-orange-100">GRAND TOTAL</span>
+                          <p className="text-lg font-bold text-orange-700 mt-2">{formatCurrency(total)}</p>
+                          <p className="text-xs text-orange-600">{purchases.length} {purchases.length === 1 ? 'item' : 'items'}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Detail table */}
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Date &amp; Time</th>
+                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Item</th>
+                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Category</th>
+                            <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {purchases.map((p: any) => (
+                            <tr key={p.id} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
+                                {fmtDateTime(p.date)}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-medium text-slate-900">{p.description}</td>
+                              <td className="px-4 py-3 text-sm">
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${CAT_COLORS[p.category] || 'bg-slate-100 text-slate-700'}`}>
+                                  {p.category.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-sm font-semibold text-slate-900 text-right">
+                                {formatCurrency(p.amount)}
+                              </td>
+                            </tr>
+                          ))}
+                          <tr className="bg-slate-100 border-t-2 border-slate-300">
+                            <td colSpan={3} className="px-4 py-3 text-sm font-bold text-slate-900">TOTAL ({purchases.length} items)</td>
+                            <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right">{formatCurrency(total)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 );
               })()}

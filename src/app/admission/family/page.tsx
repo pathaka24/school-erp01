@@ -80,7 +80,7 @@ export default function FamilyAdmissionPage() {
   const depositAmt = parseFloat(deposit.amount) || 0;
   const finalBalance = grandTotal - depositAmt;
 
-  const canProceedChildren = children.every(c => c.firstName && c.lastName && c.dateOfBirth && c.gender && c.classId && c.sectionId);
+  const canProceedChildren = children.every(c => c.firstName && c.dateOfBirth && c.gender && c.classId && c.sectionId);
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -237,7 +237,7 @@ export default function FamilyAdmissionPage() {
                       <CardContent>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           <Inp label="First Name *" value={child.firstName} onChange={v => updateChild(ci, 'firstName', v)} />
-                          <Inp label="Last Name *" value={child.lastName} onChange={v => updateChild(ci, 'lastName', v)} />
+                          <Inp label="Last Name (optional)" value={child.lastName} onChange={v => updateChild(ci, 'lastName', v)} />
                           <Inp label="Date of Birth *" type="date" value={child.dateOfBirth} onChange={v => updateChild(ci, 'dateOfBirth', v)} />
                           <Sel label="Gender *" value={child.gender} onChange={v => updateChild(ci, 'gender', v)} options={GENDERS.map(g => ({ v: g, l: g }))} />
                           <Sel label="Blood Group" value={child.bloodGroup} onChange={v => updateChild(ci, 'bloodGroup', v)} options={BLOOD_GROUPS.map(b => ({ v: b, l: b || 'Select' }))} />
@@ -377,7 +377,7 @@ export default function FamilyAdmissionPage() {
                 <CardContent className="pt-6 space-y-6">
                   <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
                     <p className="text-sm text-blue-600">Family</p>
-                    <p className="text-xl font-bold text-blue-800">{parentForm.familyName || `${children[0]?.lastName} Family`}</p>
+                    <p className="text-xl font-bold text-blue-800">{parentForm.familyName || (children[0]?.lastName ? `${children[0].lastName} Family` : `${children[0]?.firstName || 'New'} Family`)}</p>
                     <p className="text-sm text-blue-500">{children.length} children</p>
                   </div>
 
