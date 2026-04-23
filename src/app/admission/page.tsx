@@ -36,17 +36,8 @@ export default function AdmissionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<any>(null);
 
-  // Charges at admission
-  const [charges, setCharges] = useState<{ category: string; description: string; amount: string }[]>([
-    { category: 'ADMISSION', description: 'Admission Charge', amount: '' },
-    { category: 'ANNUAL', description: 'Annual Charge', amount: '' },
-    { category: 'REGISTRATION', description: 'Registration Charge', amount: '' },
-    { category: 'BOOK', description: 'Book', amount: '' },
-    { category: 'DRESS', description: 'Dress-I', amount: '' },
-    { category: 'COPY', description: 'Copy', amount: '' },
-    { category: 'DAIRY', description: 'Dairy', amount: '' },
-    { category: 'TIE_BELT', description: 'Tie / Belt', amount: '' },
-  ]);
+  // Charges at admission — populated from the selected class's fee plan (no hardcoded defaults)
+  const [charges, setCharges] = useState<{ category: string; description: string; amount: string }[]>([]);
   const [deposit, setDeposit] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '' });
   const [previousBalance, setPreviousBalance] = useState('');
   // Sibling
@@ -604,6 +595,17 @@ export default function AdmissionPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
+                            {charges.length === 0 && (
+                              <tr className="bg-white">
+                                <td colSpan={3} className="px-4 py-6 text-center">
+                                  <p className="text-sm text-slate-500">
+                                    {form.classId
+                                      ? 'No charges configured for this class. Click "Add item" below, or set them in Settings → Annual Fee Plan.'
+                                      : 'Select a class in Step 1 to load its admission charges.'}
+                                  </p>
+                                </td>
+                              </tr>
+                            )}
                             {charges.map((charge, i) => (
                               <tr key={i} className="bg-white">
                                 <td className="px-4 py-2">

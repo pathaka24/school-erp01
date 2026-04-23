@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
-import { formatDate, formatCurrency, getAcademicYears, getCurrentAcademicYear } from '@/lib/utils';
+import { formatDate, formatCurrency, getAcademicYears, getCurrentAcademicYear, compressImage } from '@/lib/utils';
 import { ArrowLeft, Save, User, Heart, MapPin, GraduationCap, School, History, Clock, Syringe, FileText, IndianRupee, Printer, BookOpen, CalendarCheck, Award, Camera, X, QrCode } from 'lucide-react';
 import QRCode from 'react-qr-code';
 
@@ -42,6 +42,13 @@ export default function StudentProfilePage() {
   const [showChargeForm, setShowChargeForm] = useState(false);
   const [showOpeningBalance, setShowOpeningBalance] = useState(false);
   const [openingForm, setOpeningForm] = useState({ amount: '', year: '2024-2025', month: '' });
+  // Buy Class Kit form
+  const [showKitForm, setShowKitForm] = useState(false);
+  const [kitItems, setKitItems] = useState<{ selected: boolean; category: string; description: string; amount: string }[]>([]);
+  const [kitDeposit, setKitDeposit] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '' });
+  const [kitDiscount, setKitDiscount] = useState({ amount: '', reason: '' });
+  const [kitLoading, setKitLoading] = useState(false);
+  const [kitSubmitting, setKitSubmitting] = useState(false);
   // Exam results
   const [examData, setExamData] = useState<any[]>([]);
   const [examLoading, setExamLoading] = useState(false);
@@ -140,14 +147,21 @@ export default function StudentProfilePage() {
     if (!file) return;
     setUploadingPhoto(true);
     try {
+      const compressed = await compressImage(file, { targetKB: 40, maxDim: 500 });
+      const originalKB = Math.round(file.size / 1024);
+      const compressedKB = Math.round(compressed.size / 1024);
+
       const formData = new FormData();
-      formData.append('photo', file);
+      formData.append('photo', compressed);
       const { data } = await api.post(`/students/${id}/photo`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setStudent((prev: any) => ({ ...prev, photo: data.photo }));
+      if (originalKB > compressedKB) {
+        console.info(`Photo compressed: ${originalKB}KB → ${compressedKB}KB`);
+      }
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Upload failed');
+      alert(err.response?.data?.error || err.message || 'Upload failed');
     }
     setUploadingPhoto(false);
     e.target.value = '';
@@ -250,6 +264,152 @@ export default function StudentProfilePage() {
     setOpeningForm({ amount: '', year: '2024-2025', month: '' });
     setShowOpeningBalance(false);
     loadLedger();
+  };
+
+  // ─── Buy Class Kit ───
+  const openKitForm = async () => {
+    setShowDepositForm(false); setShowChargeForm(false); setShowOpeningBalance(false);
+    setShowKitForm(true);
+    setKitLoading(true);
+    try {
+      const { data } = await api.get('/settings/fee-plan');
+      const classId = student?.class?.id || student?.classId;
+      const classPlan = data?.classes?.find((c: any) => c.classId === classId);
+      const charges = (classPlan?.charges || []).map((c: any) => ({
+        selected: parseFloat(c.amount) > 0,
+        category: c.category || 'AD_HOC',
+        description: c.description || String(c.category || 'Item').replace(/_/g, ' '),
+        amount: c.amount > 0 ? String(c.amount) : '',
+      }));
+      setKitItems(charges.length > 0 ? charges : [
+        { selected: true, category: 'BOOK', description: 'Books', amount: '' },
+        { selected: true, category: 'COPY', description: 'Notebooks', amount: '' },
+        { selected: true, category: 'DRESS', description: 'Dress', amount: '' },
+        { selected: false, category: 'TIE_BELT', description: 'Tie / Belt', amount: '' },
+        { selected: false, category: 'DAIRY', description: 'Diary', amount: '' },
+      ]);
+    } catch {
+      setKitItems([
+        { selected: true, category: 'BOOK', description: 'Books', amount: '' },
+        { selected: true, category: 'COPY', description: 'Notebooks', amount: '' },
+        { selected: true, category: 'DRESS', description: 'Dress', amount: '' },
+      ]);
+    } finally {
+      setKitLoading(false);
+    }
+  };
+
+  const kitSelectedTotal = kitItems
+    .filter(k => k.selected)
+    .reduce((s, k) => s + (parseFloat(k.amount) || 0), 0);
+
+  const kitDiscountAmount = Math.min(parseFloat(kitDiscount.amount) || 0, kitSelectedTotal);
+  const kitNetTotal = kitSelectedTotal - kitDiscountAmount;
+
+  const handleKitSubmit = async () => {
+    const picked = kitItems.filter(k => k.selected && (parseFloat(k.amount) || 0) > 0);
+    if (picked.length === 0) { alert('Select at least one item with an amount'); return; }
+    setKitSubmitting(true);
+    try {
+      const payload: any = {
+        items: picked.map(k => ({ category: k.category, description: k.description, amount: parseFloat(k.amount) })),
+      };
+      const discAmt = parseFloat(kitDiscount.amount) || 0;
+      if (discAmt > 0) {
+        payload.discount = { amount: discAmt, reason: kitDiscount.reason || null };
+      }
+      const depositAmt = parseFloat(kitDeposit.amount) || 0;
+      if (depositAmt > 0) {
+        payload.deposit = { amount: depositAmt, paymentMethod: kitDeposit.paymentMethod, receivedBy: kitDeposit.receivedBy || null };
+      }
+      const { data } = await api.post(`/fees/ledger/kit-purchase/${id}`, payload);
+      printKitReceipt(data, picked);
+      setShowKitForm(false);
+      setKitItems([]);
+      setKitDeposit({ amount: '', paymentMethod: 'CASH', receivedBy: '' });
+      setKitDiscount({ amount: '', reason: '' });
+      loadLedger();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Kit purchase failed');
+    } finally {
+      setKitSubmitting(false);
+    }
+  };
+
+  const printKitReceipt = (data: any, items: { category: string; description: string; amount: string }[]) => {
+    const rows = items.map(it =>
+      `<tr><td style="padding:6px 12px;font-size:13px;border:1px solid #cbd5e1">${it.description}</td><td style="padding:6px 12px;font-size:13px;border:1px solid #cbd5e1;text-align:right;font-weight:600">₹${parseFloat(it.amount).toLocaleString('en-IN')}</td></tr>`
+    ).join('');
+    const paid = data.totalPaid || 0;
+    const balance = data.balanceAfter || 0;
+    const disc = data.discountAmount || 0;
+    const netCharged = data.netCharged != null ? data.netCharged : (data.totalCharged || 0) - disc;
+    const html = `<!DOCTYPE html><html><head><title>Kit Purchase - ${data.receiptNumber}</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Arial, sans-serif; margin:20px; color:#1e293b; font-size:13px; }
+  .header { text-align:center; border-bottom:3px solid #006400; padding-bottom:12px; margin-bottom:16px; }
+  .school { font-size:20px; font-weight:bold; color:#006400; }
+  .rcp { display:inline-block; background:#1e40af; color:white; padding:4px 20px; border-radius:4px; font-size:14px; font-weight:bold; margin:8px 0; font-family:monospace; }
+  h3 { color:#006400; font-size:13px; border-bottom:1px solid #e2e8f0; padding-bottom:4px; margin:16px 0 8px; text-transform:uppercase; letter-spacing:1px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; }
+  .field .label { font-size:10px; color:#64748b; text-transform:uppercase; }
+  .field .value { font-size:13px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; }
+  th { background:#006400; color:white; padding:6px 12px; font-size:11px; text-align:left; text-transform:uppercase; }
+  .total-row td { background:#f0fdf4; font-weight:bold; font-size:14px; }
+  .balance-box { border:3px solid; border-radius:8px; padding:12px; text-align:center; margin:12px 0; font-size:18px; font-weight:bold; }
+  .sig-row { display:flex; justify-content:space-between; margin-top:40px; }
+  .sig-line { border-top:1px solid #000; width:180px; text-align:center; padding-top:4px; font-size:11px; }
+  @media print { body { margin:10px; } }
+</style></head><body>
+  <div class="header">
+    <div class="school">PATHAK EDUCATIONAL FOUNDATION SCHOOL</div>
+    <div style="font-size:11px;color:#666">Salarpur, Sector - 101 | Ph: 6397339902</div>
+    <div style="font-size:14px;font-weight:bold;color:#1e293b;margin-top:6px">KIT PURCHASE RECEIPT</div>
+    <div class="rcp">${data.receiptNumber}</div>
+    <div style="font-size:11px;color:#666">Date: ${new Date().toLocaleString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}</div>
+  </div>
+  <h3>Student Details</h3>
+  <div class="grid">
+    <div class="field"><div class="label">Name</div><div class="value">${data.student.name}</div></div>
+    <div class="field"><div class="label">Admission No</div><div class="value">${data.student.admissionNo}</div></div>
+    <div class="field"><div class="label">Class</div><div class="value">${data.student.className || '—'} — ${data.student.sectionName || ''}</div></div>
+  </div>
+  <h3>Items Purchased</h3>
+  <table>
+    <thead><tr><th>Description</th><th style="text-align:right;width:30%">Amount</th></tr></thead>
+    <tbody>
+      ${rows}
+      <tr>
+        <td style="padding:6px 12px;font-size:13px;border:1px solid #cbd5e1">Subtotal</td>
+        <td style="padding:6px 12px;font-size:13px;border:1px solid #cbd5e1;text-align:right;font-weight:600">₹${(data.totalCharged || 0).toLocaleString('en-IN')}</td>
+      </tr>
+      ${disc > 0 ? `<tr>
+        <td style="padding:6px 12px;border:1px solid #cbd5e1;color:#7c3aed;font-weight:600">Discount${data.discount?.description?.includes('—') ? ' — ' + data.discount.description.split('—')[1].trim() : ''}</td>
+        <td style="padding:6px 12px;border:1px solid #cbd5e1;text-align:right;color:#7c3aed;font-weight:bold;font-size:14px">- ₹${disc.toLocaleString('en-IN')}</td>
+      </tr>` : ''}
+      <tr class="total-row">
+        <td style="padding:8px 12px;border:1px solid #cbd5e1;font-size:14px">Net Total</td>
+        <td style="padding:8px 12px;border:1px solid #cbd5e1;text-align:right;font-size:14px">₹${netCharged.toLocaleString('en-IN')}</td>
+      </tr>
+      ${paid > 0 ? `<tr>
+        <td style="padding:6px 12px;border:1px solid #cbd5e1;color:#16a34a;font-weight:600">Paid (${kitDeposit.paymentMethod})</td>
+        <td style="padding:6px 12px;border:1px solid #cbd5e1;text-align:right;color:#16a34a;font-weight:bold;font-size:14px">- ₹${paid.toLocaleString('en-IN')}</td>
+      </tr>` : ''}
+    </tbody>
+  </table>
+  <div class="balance-box" style="border-color:${balance > 0 ? '#dc2626' : '#16a34a'}; color:${balance > 0 ? '#dc2626' : '#16a34a'}">
+    ${balance > 0 ? 'Balance Due' : 'Paid in Full'}: ₹${Math.abs(balance).toLocaleString('en-IN')}
+  </div>
+  <div class="sig-row">
+    <div class="sig-line">Parent's Signature</div>
+    <div class="sig-line">Accountant</div>
+    <div class="sig-line">Principal</div>
+  </div>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
   };
 
   const handlePrintLedger = () => {
@@ -1370,13 +1530,16 @@ export default function StudentProfilePage() {
                       Family view
                     </label>
                   )}
-                  <button onClick={() => { setShowOpeningBalance(!showOpeningBalance); setShowChargeForm(false); setShowDepositForm(false); }} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">
+                  <button onClick={() => showKitForm ? setShowKitForm(false) : openKitForm()} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+                    🛍️ Buy Kit
+                  </button>
+                  <button onClick={() => { setShowOpeningBalance(!showOpeningBalance); setShowChargeForm(false); setShowDepositForm(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">
                     Opening Balance
                   </button>
-                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
+                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
                     + Charge
                   </button>
-                  <button onClick={() => { setShowDepositForm(!showDepositForm); setShowChargeForm(false); setShowOpeningBalance(false); }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
+                  <button onClick={() => { setShowDepositForm(!showDepositForm); setShowChargeForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
                     + Deposit
                   </button>
                   {ledgerData?.ledger?.length > 0 && (
@@ -1494,6 +1657,115 @@ export default function StudentProfilePage() {
                     </div>
                   </div>
                 </form>
+              )}
+
+              {/* Buy Class Kit form */}
+              {showKitForm && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-blue-900">Buy Class Kit — {student?.class?.name}{student?.section?.name ? ` (${student.section.name})` : ''}</h3>
+                      <p className="text-xs text-blue-700 mt-0.5">Items and amounts pre-loaded from Annual Fee Plan. Uncheck what student isn&apos;t buying, edit amounts as needed.</p>
+                    </div>
+                    <button onClick={() => setShowKitForm(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+                  </div>
+
+                  {kitLoading ? (
+                    <p className="text-sm text-blue-700">Loading class kit...</p>
+                  ) : (
+                    <>
+                      <div className="bg-white rounded-xl overflow-hidden border border-blue-100">
+                        <table className="w-full">
+                          <thead className="bg-slate-50">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 w-10"></th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Item</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 w-36">Category</th>
+                              <th className="px-3 py-2 text-right text-xs font-medium text-slate-500 w-36">Amount (₹)</th>
+                              <th className="px-3 py-2 w-10"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {kitItems.map((item, i) => (
+                              <tr key={i} className={item.selected ? '' : 'opacity-50'}>
+                                <td className="px-3 py-2 text-center">
+                                  <input type="checkbox" checked={item.selected}
+                                    onChange={e => { const c = [...kitItems]; c[i].selected = e.target.checked; setKitItems(c); }} />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input value={item.description}
+                                    onChange={e => { const c = [...kitItems]; c[i].description = e.target.value; setKitItems(c); }}
+                                    className="w-full text-sm text-slate-900 bg-transparent outline-none" />
+                                </td>
+                                <td className="px-3 py-2 text-xs text-slate-500">{item.category.replace(/_/g, ' ')}</td>
+                                <td className="px-3 py-2">
+                                  <input type="number" placeholder="0" value={item.amount}
+                                    onChange={e => { const c = [...kitItems]; c[i].amount = e.target.value; setKitItems(c); }}
+                                    className="w-full text-sm text-slate-900 text-right bg-transparent outline-none font-medium" />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button onClick={() => setKitItems(kitItems.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600">
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div className="px-3 py-2 border-t border-slate-200 flex justify-between items-center">
+                          <button onClick={() => setKitItems([...kitItems, { selected: true, category: 'AD_HOC', description: '', amount: '' }])}
+                            className="text-xs text-blue-600 hover:text-blue-800">+ Add custom item</button>
+                          <div className="text-sm font-bold text-slate-900">Total: {formatCurrency(kitSelectedTotal)}</div>
+                        </div>
+                      </div>
+
+                      {/* Optional discount */}
+                      <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
+                        <h4 className="text-xs font-semibold text-purple-800 mb-2">Discount (optional — admin can give ₹ off)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <input type="number" placeholder="Discount amount (₹)" value={kitDiscount.amount}
+                            onChange={e => setKitDiscount({ ...kitDiscount, amount: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          <input placeholder="Reason (e.g. sibling, scholarship, approved by X)" value={kitDiscount.reason}
+                            onChange={e => setKitDiscount({ ...kitDiscount, reason: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        </div>
+                        {kitSelectedTotal > 0 && (
+                          <div className="mt-2 flex justify-end gap-4 text-xs">
+                            <span className="text-slate-600">Subtotal: <strong>{formatCurrency(kitSelectedTotal)}</strong></span>
+                            {kitDiscountAmount > 0 && <span className="text-purple-700">Discount: <strong>-{formatCurrency(kitDiscountAmount)}</strong></span>}
+                            <span className="text-slate-900">Net: <strong>{formatCurrency(kitNetTotal)}</strong></span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Optional deposit */}
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                        <h4 className="text-xs font-semibold text-green-800 mb-2">Payment at Purchase (optional — leave blank to add to balance)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          <input type="number" placeholder="Paid amount (₹)" value={kitDeposit.amount}
+                            onChange={e => setKitDeposit({ ...kitDeposit, amount: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          <select value={kitDeposit.paymentMethod} onChange={e => setKitDeposit({ ...kitDeposit, paymentMethod: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                            {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                          </select>
+                          <input placeholder="Received by" value={kitDeposit.receivedBy}
+                            onChange={e => setKitDeposit({ ...kitDeposit, receivedBy: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => setShowKitForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                        <button onClick={handleKitSubmit} disabled={kitSubmitting || kitSelectedTotal <= 0}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+                          {kitSubmitting ? 'Saving...' : `Confirm & Print Receipt (${formatCurrency(kitNetTotal)})`}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
 
               {/* Ledger table — matches physical register */}
