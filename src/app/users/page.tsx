@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
-import { Plus, Trash2, Search, Shield, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Search, Shield, ShieldCheck, Key, Copy, Check, X } from 'lucide-react';
 
 interface User {
   id: string;
@@ -34,6 +34,11 @@ export default function UsersPage() {
   const [form, setForm] = useState({
     firstName: '', lastName: '', email: '', phone: '', password: '', role: 'TEACHER',
   });
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetSaving, setResetSaving] = useState(false);
+  const [resetResult, setResetResult] = useState<{ email: string; password: string } | null>(null);
+  const [resetCopied, setResetCopied] = useState(false);
 
   useEffect(() => { fetchUsers(); }, [search, roleFilter]);
 
@@ -70,6 +75,44 @@ export default function UsersPage() {
     } catch {
       alert('Failed to update user');
     }
+  };
+
+  const openReset = (user: User) => {
+    setResetTarget(user);
+    setResetPassword('');
+    setResetResult(null);
+    setResetCopied(false);
+  };
+
+  const closeReset = () => {
+    setResetTarget(null);
+    setResetPassword('');
+    setResetResult(null);
+    setResetCopied(false);
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetTarget) return;
+    setResetSaving(true);
+    try {
+      const { data } = await api.post(`/users/${resetTarget.id}/reset-password`, {
+        password: resetPassword.trim() || undefined,
+      });
+      setResetResult({ email: data.user.email, password: data.password });
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to reset password');
+    } finally {
+      setResetSaving(false);
+    }
+  };
+
+  const copyResetPassword = async () => {
+    if (!resetResult) return;
+    try {
+      await navigator.clipboard.writeText(resetResult.password);
+      setResetCopied(true);
+      setTimeout(() => setResetCopied(false), 1500);
+    } catch {}
   };
 
   const handleDelete = async (id: string) => {
@@ -168,9 +211,22 @@ export default function UsersPage() {
                       </button>
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      <button onClick={() => handleDelete(user.id)} className="p-1 text-red-500 hover:text-red-700">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openReset(user)}
+                          title="Reset password"
+                          className="p-1 text-slate-500 hover:text-blue-600"
+                        >
+                          <Key className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(user.id)}
+                          title="Delete user"
+                          className="p-1 text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -179,6 +235,111 @@ export default function UsersPage() {
           </table>
         </div>
       </div>
+
+      {resetTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <Key className="h-5 w-5 text-blue-600" />
+                <h3 className="text-lg font-semibold text-slate-900">Reset password</h3>
+              </div>
+              <button onClick={closeReset} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-sm text-slate-500">User</p>
+                <p className="font-medium text-slate-900">
+                  {resetTarget.firstName} {resetTarget.lastName}
+                </p>
+                <p className="text-sm text-slate-500">{resetTarget.email}</p>
+              </div>
+
+              {!resetResult ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      New password
+                    </label>
+                    <input
+                      type="text"
+                      value={resetPassword}
+                      onChange={(e) => setResetPassword(e.target.value)}
+                      placeholder="Leave blank to auto-generate"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                      autoFocus
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Minimum 6 characters. If left blank, a secure 12-character password is generated.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={closeReset}
+                      className="px-4 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleResetPassword}
+                      disabled={resetSaving}
+                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {resetSaving ? 'Resetting...' : 'Reset password'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                    Copy this password now — it won't be shown again.
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      New password
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={resetResult.password}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-900 bg-slate-50"
+                        onFocus={(e) => e.target.select()}
+                      />
+                      <button
+                        onClick={copyResetPassword}
+                        className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-1"
+                      >
+                        {resetCopied ? (
+                          <>
+                            <Check className="h-4 w-4 text-emerald-600" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-4 w-4" /> Copy
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      onClick={closeReset}
+                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }

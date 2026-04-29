@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { useAuthStore } from '@/lib/store';
 import api from '@/lib/api';
-import { Users, ClipboardList, FileText, NotebookPen, BookOpen, Calendar } from 'lucide-react';
+import { Users, ClipboardList, FileText, NotebookPen, BookOpen, Calendar, Sun, ChevronRight } from 'lucide-react';
 
 function StatCard({ title, value, icon: Icon, color }: { title: string; value: string | number; icon: any; color: string }) {
   return (
@@ -59,6 +59,23 @@ export default function TeacherDashboard() {
           </h1>
           <p className="text-slate-500">Employee ID: {teacher?.employeeId}</p>
         </div>
+
+        {/* Today banner */}
+        <a
+          href="/teacher/today"
+          className="flex items-center justify-between bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl p-5 hover:from-blue-700 hover:to-indigo-700 transition shadow-sm"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-11 h-11 rounded-lg bg-white/20 flex items-center justify-center">
+              <Sun className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="font-semibold text-lg">See your day</p>
+              <p className="text-sm text-blue-100">Today's periods, attendance status, lesson plans and pending grades</p>
+            </div>
+          </div>
+          <ChevronRight className="h-5 w-5" />
+        </a>
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

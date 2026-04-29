@@ -9,13 +9,13 @@ import gsap from 'gsap';
 
 const DEMO_CREDENTIALS = [
   { role: 'Admin', email: 'admin@school.com', password: 'password123' },
-  { role: 'Teacher', email: 'teacher1@school.com', password: 'password123' },
-  { role: 'Parent', email: 'parent@school.com', password: 'password123' },
 ];
 
+const DEV_AUTOFILL = process.env.NODE_ENV !== 'production';
+
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(DEV_AUTOFILL ? DEMO_CREDENTIALS[0].email : '');
+  const [password, setPassword] = useState(DEV_AUTOFILL ? DEMO_CREDENTIALS[0].password : '');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);

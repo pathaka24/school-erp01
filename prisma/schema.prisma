@@ -188,6 +188,15 @@ model User {
   teacher Teacher?
   parent  Parent?
 
+  noticesAuthored      Notice[]            @relation("NoticeAuthor")
+  noticeReads          NoticeRead[]
+  threadParticipations ThreadParticipant[]
+  messagesSent         Message[]           @relation("MessageSender")
+  messageReads         MessageRead[]
+  leavesApplied        LeaveApplication[]  @relation("LeaveApplicant")
+  leavesReviewed       LeaveApplication[]  @relation("LeaveReviewer")
+  eventsCreated        CalendarEvent[]
+
   @@map("users")
 }
 
@@ -286,6 +295,11 @@ model Student {
   storeOrders        StoreOrder[]
   feeLedger          FeeLedger[]
   monthlyReports     MonthlyReport[]
+  classTestMarks     ClassTestMark[]
+  messageThreads     MessageThread[]
+  leaveApplications  LeaveApplication[]
+  bookIssues         BookIssue[]
+  behaviourLogs      BehaviourLog[]
 
   @@map("students")
 }
@@ -325,8 +339,12 @@ model Teacher {
   timetableSlots    Timetable[]
   markedAttendances Attendance[] @relation("MarkedBy")
   lessonPlans       LessonPlan[]
+  classTests        ClassTest[]
   salaries          Salary[]
   attendances       TeacherAttendance[]
+  bookIssues        BookIssue[]
+  behaviourLogs     BehaviourLog[]
+  studyMaterials    StudyMaterial[]
 
   @@map("teachers")
 }
@@ -371,6 +389,11 @@ model Class {
   exams          Exam[]
   feeStructures  FeeStructure[]
   lessonPlans    LessonPlan[]
+  syllabi        Syllabus[]
+  classTests     ClassTest[]
+  notices        Notice[]
+  events         CalendarEvent[]
+  studyMaterials StudyMaterial[]
 
   @@map("classes")
 }
@@ -387,6 +410,9 @@ model Section {
   students       Student[]
   timetableSlots Timetable[]
   lessonPlans    LessonPlan[]
+  classTests     ClassTest[]
+  notices        Notice[]
+  events         CalendarEvent[]
 
   @@unique([classId, name])
   @@map("sections")
@@ -406,6 +432,9 @@ model Subject {
   examSubjects   ExamSubject[]
   assessments    Assessment[]
   lessonPlans    LessonPlan[]
+  syllabi        Syllabus[]
+  classTests     ClassTest[]
+  studyMaterials StudyMaterial[]
 
   @@map("subjects")
 }
@@ -691,6 +720,91 @@ enum LessonPlanStatus {
   CANCELLED
 }
 
+// ─── Syllabus ──────────────────────────────────────────────
+
+model Syllabus {
+  id           String   @id @default(uuid())
+  classId      String
+  subjectId    String
+  academicYear String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  class   Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subject Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topics  SyllabusTopic[]
+
+  @@unique([classId, subjectId, academicYear])
+  @@map("syllabi")
+}
+
+model SyllabusTopic {
+  id            String         @id @default(uuid())
+  syllabusId    String
+  chapter       String?        // e.g. "Chapter 4" or chapter number
+  name          String         // topic name
+  description   String?
+  expectedDate  DateTime?      @db.Date
+  status        SyllabusStatus @default(PENDING)
+  completedDate DateTime?      @db.Date
+  order         Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  syllabus   Syllabus    @relation(fields: [syllabusId], references: [id], onDelete: Cascade)
+  classTests ClassTest[]
+
+  @@map("syllabus_topics")
+}
+
+enum SyllabusStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+// ─── Class Tests (lightweight, teacher-owned) ──────────────
+
+model ClassTest {
+  id              String   @id @default(uuid())
+  teacherId       String
+  classId         String
+  sectionId       String
+  subjectId       String
+  syllabusTopicId String?
+  name            String   // e.g. "Chapter 4 Unit Test"
+  description     String?
+  date            DateTime @db.Date
+  maxMarks        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  teacher       Teacher         @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  class         Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section       Section         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  subject       Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  syllabusTopic SyllabusTopic?  @relation(fields: [syllabusTopicId], references: [id], onDelete: SetNull)
+  marks         ClassTestMark[]
+
+  @@map("class_tests")
+}
+
+model ClassTestMark {
+  id            String   @id @default(uuid())
+  classTestId   String
+  studentId     String
+  marksObtained Float
+  remarks       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  classTest ClassTest @relation(fields: [classTestId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classTestId, studentId])
+  @@map("class_test_marks")
+}
+
 // ─── Fee Management ────────────────────────────────────────
 
 model FeeStructure {
@@ -940,4 +1054,285 @@ model ScholarshipTransaction {
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@map("scholarship_transactions")
+}
+
+// ─── Communication: Notices ────────────────────────────────
+
+model Notice {
+  id          String         @id @default(uuid())
+  title       String
+  body        String
+  audience    NoticeAudience @default(ALL)
+  classId     String?
+  sectionId   String?
+  authorId    String
+  isPinned    Boolean        @default(false)
+  publishedAt DateTime       @default(now())
+  expiresAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  author  User         @relation("NoticeAuthor", fields: [authorId], references: [id])
+  class   Class?       @relation(fields: [classId], references: [id])
+  section Section?     @relation(fields: [sectionId], references: [id])
+  reads   NoticeRead[]
+
+  @@map("notices")
+}
+
+model NoticeRead {
+  id       String   @id @default(uuid())
+  noticeId String
+  userId   String
+  readAt   DateTime @default(now())
+
+  notice Notice @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([noticeId, userId])
+  @@map("notice_reads")
+}
+
+enum NoticeAudience {
+  ALL
+  ADMINS
+  TEACHERS
+  PARENTS
+  STUDENTS
+  CLASS
+  SECTION
+}
+
+// ─── Communication: Messaging ──────────────────────────────
+
+model MessageThread {
+  id        String   @id @default(uuid())
+  subject   String
+  studentId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  student      Student?            @relation(fields: [studentId], references: [id])
+  participants ThreadParticipant[]
+  messages     Message[]
+
+  @@map("message_threads")
+}
+
+model ThreadParticipant {
+  id       String @id @default(uuid())
+  threadId String
+  userId   String
+
+  thread MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+  @@map("thread_participants")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  threadId  String
+  senderId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  thread MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender User          @relation("MessageSender", fields: [senderId], references: [id])
+  reads  MessageRead[]
+
+  @@map("messages")
+}
+
+model MessageRead {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  readAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@map("message_reads")
+}
+
+// ─── Leave Applications ────────────────────────────────────
+
+model LeaveApplication {
+  id           String      @id @default(uuid())
+  studentId    String
+  fromDate     DateTime    @db.Date
+  toDate       DateTime    @db.Date
+  reason       String
+  status       LeaveStatus @default(PENDING)
+  appliedById  String
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  appliedBy  User    @relation("LeaveApplicant", fields: [appliedById], references: [id])
+  reviewedBy User?   @relation("LeaveReviewer", fields: [reviewedById], references: [id])
+
+  @@map("leave_applications")
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// ─── Calendar / Events ─────────────────────────────────────
+
+model CalendarEvent {
+  id          String         @id @default(uuid())
+  title       String
+  description String?
+  startDate   DateTime       @db.Date
+  endDate     DateTime       @db.Date
+  startTime   String?
+  endTime     String?
+  type        EventType      @default(EVENT)
+  audience    NoticeAudience @default(ALL)
+  classId     String?
+  sectionId   String?
+  location    String?
+  color       String?
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  createdBy User     @relation(fields: [createdById], references: [id])
+  class     Class?   @relation(fields: [classId], references: [id])
+  section   Section? @relation(fields: [sectionId], references: [id])
+
+  @@map("calendar_events")
+}
+
+enum EventType {
+  HOLIDAY
+  EXAM
+  PTM
+  EVENT
+  SPORTS
+  CULTURAL
+  ACADEMIC
+  OTHER
+}
+
+// ─── Library ───────────────────────────────────────────────
+
+model Book {
+  id           String   @id @default(uuid())
+  title        String
+  author       String
+  isbn         String?  @unique
+  category     String?
+  publisher    String?
+  edition      String?
+  language     String?
+  totalCopies  Int      @default(1)
+  shelfNumber  String?
+  description  String?
+  coverImage   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  issues BookIssue[]
+
+  @@map("books")
+}
+
+model BookIssue {
+  id           String      @id @default(uuid())
+  bookId       String
+  studentId    String?
+  teacherId    String?
+  issuedDate   DateTime    @default(now())
+  dueDate      DateTime    @db.Date
+  returnedDate DateTime?
+  fineAmount   Float       @default(0)
+  status       IssueStatus @default(ISSUED)
+  remarks      String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  book    Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  student Student? @relation(fields: [studentId], references: [id])
+  teacher Teacher? @relation(fields: [teacherId], references: [id])
+
+  @@map("book_issues")
+}
+
+enum IssueStatus {
+  ISSUED
+  RETURNED
+  OVERDUE
+  LOST
+}
+
+// ─── Behaviour Log ─────────────────────────────────────────
+
+model BehaviourLog {
+  id             String        @id @default(uuid())
+  studentId      String
+  teacherId      String
+  type           BehaviourType @default(NEUTRAL)
+  category       String
+  description    String
+  date           DateTime      @db.Date
+  severity       Int           @default(1)
+  parentNotified Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  @@map("behaviour_logs")
+}
+
+enum BehaviourType {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+}
+
+// ─── Study Materials ───────────────────────────────────────
+
+model StudyMaterial {
+  id          String       @id @default(uuid())
+  title       String
+  description String?
+  classId     String
+  subjectId   String
+  teacherId   String
+  type        MaterialType @default(LINK)
+  url         String
+  fileName    String?
+  fileSize    Int?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  class   Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  @@map("study_materials")
+}
+
+enum MaterialType {
+  PDF
+  LINK
+  VIDEO
+  NOTE
+  IMAGE
+  DOC
+  OTHER
 }

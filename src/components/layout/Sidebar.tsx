@@ -9,21 +9,28 @@ import {
   LayoutDashboard, Users, UserPlus, GraduationCap, ClipboardList,
   Calendar, BookOpen, Award, CreditCard, School, ChevronLeft, Menu,
   FileText, UsersRound, Sparkles, BarChart3, Printer, Shield, NotebookPen, IndianRupee, ShoppingBag, Settings,
-  Home, QrCode, CalendarCheck,
+  Home, QrCode, CalendarCheck, Sun, ClipboardCheck,
+  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen,
 } from 'lucide-react';
 import { useState } from 'react';
 
 const adminMenu = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'New Admission', href: '/admission', icon: UserPlus },
+  { label: 'Bulk Import', href: '/import', icon: FileSpreadsheet },
   { label: 'Users', href: '/users', icon: Shield },
   { label: 'Students', href: '/students', icon: Users },
   { label: 'Teachers', href: '/teachers', icon: GraduationCap },
   { label: 'Academics', href: '/academics', icon: BookOpen },
+  { label: 'Notices', href: '/notices', icon: Megaphone },
+  { label: 'Messages', href: '/messages', icon: MessageSquare },
+  { label: 'Calendar', href: '/calendar', icon: Calendar },
+  { label: 'Library', href: '/library', icon: Library },
   { label: 'Attendance', href: '/attendance', icon: ClipboardList },
   { label: 'Staff Attendance', href: '/teacher-attendance', icon: CalendarCheck },
   { label: 'QR Scanner', href: '/qr-scan', icon: QrCode },
   { label: 'Scholarship Diary', href: '/scholarship-diary', icon: Sparkles },
+  { label: 'Teacher Diary', href: '/teacher-diary', icon: NotebookPen },
   { label: 'Timetable', href: '/timetable', icon: Calendar },
   { label: 'Exams', href: '/exams', icon: FileText },
   { label: 'Exam Timetable', href: '/exam-timetable', icon: Calendar },
@@ -41,21 +48,37 @@ const adminMenu = [
 ];
 
 const teacherMenu = [
+  { label: 'Today', href: '/teacher/today', icon: Sun },
   { label: 'Dashboard', href: '/teacher/dashboard', icon: LayoutDashboard },
   { label: 'My Students', href: '/teacher/students', icon: Users },
+  { label: 'Notices', href: '/notices', icon: Megaphone },
+  { label: 'Messages', href: '/messages', icon: MessageSquare },
+  { label: 'Calendar', href: '/calendar', icon: Calendar },
   { label: 'Attendance', href: '/teacher/attendance', icon: ClipboardList },
+  { label: 'Leave Requests', href: '/teacher/leave', icon: CalendarOff },
   { label: 'Timetable', href: '/timetable', icon: Calendar },
   { label: 'Exams', href: '/teacher/exams', icon: FileText },
   { label: 'Grades', href: '/teacher/grades', icon: Award },
   { label: 'Lesson Plans', href: '/teacher/lesson-plans', icon: NotebookPen },
+  { label: 'Syllabus', href: '/teacher/syllabus', icon: BookOpen },
+  { label: 'Class Tests', href: '/teacher/class-tests', icon: ClipboardCheck },
+  { label: 'Behaviour Log', href: '/teacher/behaviour', icon: ShieldAlert },
+  { label: 'Study Materials', href: '/teacher/materials', icon: FolderOpen },
 ];
 
 const parentMenu = [
   { label: 'Dashboard', href: '/parent', icon: Home },
   { label: 'My Children', href: '/parent/children', icon: Users },
+  { label: 'Notices', href: '/notices', icon: Megaphone },
+  { label: 'Messages', href: '/messages', icon: MessageSquare },
+  { label: 'Calendar', href: '/calendar', icon: Calendar },
   { label: 'Attendance', href: '/parent/attendance', icon: ClipboardList },
+  { label: 'Leave', href: '/parent/leave', icon: CalendarOff },
   { label: 'Exam Results', href: '/parent/exams', icon: Award },
   { label: 'Fee Ledger', href: '/parent/fees', icon: IndianRupee },
+  { label: 'Daily Diary', href: '/parent/daily-diary', icon: NotebookPen },
+  { label: 'Behaviour Notes', href: '/parent/behaviour', icon: ShieldAlert },
+  { label: 'Study Materials', href: '/parent/materials', icon: FolderOpen },
   { label: 'Scholarship Diary', href: '/parent/diary', icon: Sparkles },
   { label: 'Report Card', href: '/parent/report-card', icon: Printer },
 ];
