@@ -22,7 +22,7 @@ type Diary = {
   teacher: { id: string; employeeId: string; name: string };
   range: { from: string; to: string };
   days: any[];
-  counts: { lessons: number; tests: number; days: number; completedLessons: number };
+  counts: { lessons: number; tests: number; days: number; completedLessons: number; dailyLogs: number };
 };
 
 export default function AdminTeacherDiaryPage() {
@@ -96,8 +96,9 @@ export default function AdminTeacherDiaryPage() {
 
         {data && (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <SummaryCard label="Days with entries" value={data.counts.days} icon={CalendarDays} color="bg-blue-500" />
+              <SummaryCard label="Daily log entries" value={data.counts.dailyLogs} icon={BookOpen} color="bg-cyan-500" />
               <SummaryCard label="Lessons logged" value={data.counts.lessons} icon={BookOpen} color="bg-emerald-500" />
               <SummaryCard label="Lessons completed" value={data.counts.completedLessons} icon={GraduationCap} color="bg-indigo-500" />
               <SummaryCard label="Class tests" value={data.counts.tests} icon={ClipboardCheck} color="bg-amber-500" />
@@ -147,6 +148,7 @@ function DayCard({ day }: { day: any }) {
           </span>
         </div>
         <div className="flex gap-2 text-xs">
+          {day.dailyLog && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">Daily log ✓</span>}
           <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">{day.lessons.length} lessons</span>
           {day.tests.length > 0 && (
             <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded">{day.tests.length} tests</span>
@@ -154,6 +156,34 @@ function DayCard({ day }: { day: any }) {
         </div>
       </div>
       <div className="p-5 space-y-4">
+        {day.dailyLog && (
+          <div className="border border-blue-200 bg-blue-50/40 rounded-lg p-3">
+            <p className="text-xs font-medium text-blue-700 uppercase tracking-wide mb-2">Daily Log</p>
+            {day.dailyLog.summary && <p className="text-sm text-slate-700">{day.dailyLog.summary}</p>}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+              {day.dailyLog.highlights && (
+                <div>
+                  <p className="text-xs font-medium text-emerald-600 uppercase">Highlights</p>
+                  <p className="text-sm text-slate-700">{day.dailyLog.highlights}</p>
+                </div>
+              )}
+              {day.dailyLog.concerns && (
+                <div>
+                  <p className="text-xs font-medium text-red-600 uppercase">Concerns</p>
+                  <p className="text-sm text-slate-700">{day.dailyLog.concerns}</p>
+                </div>
+              )}
+            </div>
+            {day.dailyLog.tomorrowPlan && (
+              <p className="text-sm text-slate-600 mt-2"><strong className="text-xs uppercase text-slate-400">Tomorrow:</strong> {day.dailyLog.tomorrowPlan}</p>
+            )}
+            <div className="flex gap-3 text-xs text-slate-500 mt-2">
+              {day.dailyLog.periodsTaught != null && <span>{day.dailyLog.periodsTaught} periods</span>}
+              {day.dailyLog.mood && <span>Mood: {day.dailyLog.mood}</span>}
+              {day.dailyLog.signature && <span className="font-serif italic">— {day.dailyLog.signature}</span>}
+            </div>
+          </div>
+        )}
         {day.tests.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-medium text-amber-700 uppercase tracking-wide">Tests</p>

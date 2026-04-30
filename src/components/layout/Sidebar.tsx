@@ -60,6 +60,7 @@ const teacherMenu = [
   { label: 'Exams', href: '/teacher/exams', icon: FileText },
   { label: 'Grades', href: '/teacher/grades', icon: Award },
   { label: 'Lesson Plans', href: '/teacher/lesson-plans', icon: NotebookPen },
+  { label: 'Daily Log Book', href: '/teacher/daily-log', icon: BookOpen },
   { label: 'Syllabus', href: '/teacher/syllabus', icon: BookOpen },
   { label: 'Class Tests', href: '/teacher/class-tests', icon: ClipboardCheck },
   { label: 'Behaviour Log', href: '/teacher/behaviour', icon: ShieldAlert },

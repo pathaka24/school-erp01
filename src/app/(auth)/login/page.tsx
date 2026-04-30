@@ -8,7 +8,9 @@ import { Mail, Lock, Eye, EyeOff, GraduationCap, Loader2, Copy, Check } from 'lu
 import gsap from 'gsap';
 
 const DEMO_CREDENTIALS = [
-  { role: 'Admin', email: 'admin@school.com', password: 'password123' },
+  { role: 'Admin', email: 'admin@school.com', password: 'password123', color: '#3b82f6' },
+  { role: 'Teacher', email: 'rahul.sharma@school.com', password: 'teacher123', color: '#10b981' },
+  { role: 'Parent', email: 'parent@school.com', password: 'parent123', color: '#a855f7' },
 ];
 
 const DEV_AUTOFILL = process.env.NODE_ENV !== 'production';
@@ -133,6 +135,26 @@ export default function LoginPage() {
     setPassword(DEMO_CREDENTIALS[index].password);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 1500);
+  };
+
+  const quickLogin = async (creds: { email: string; password: string }) => {
+    setError('');
+    setLoading(true);
+    setEmail(creds.email);
+    setPassword(creds.password);
+    try {
+      const { data } = await api.post('/auth/login', { email: creds.email, password: creds.password });
+      setAuth(data.user, data.token);
+      const dest = data.user.role === 'TEACHER' ? '/teacher/dashboard' : data.user.role === 'PARENT' ? '/parent' : '/dashboard';
+      router.push(dest);
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.message || 'Login failed';
+      setError(creds.email === 'parent@school.com' && msg.toLowerCase().includes('invalid')
+        ? 'Parent demo not seeded yet. Open /api/seed-parent in your browser to create it.'
+        : msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -334,55 +356,40 @@ export default function LoginPage() {
           {/* Demo credentials */}
           <div ref={demoRef} className="mt-6 pt-5" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <p className="text-xs text-blue-300/40 text-center mb-3 uppercase tracking-wider font-medium">
-              Demo Credentials
+              Quick Login (Demo)
             </p>
-            <div className="space-y-2">
-              {DEMO_CREDENTIALS.map((cred, i) => (
+            <div className="grid grid-cols-3 gap-2">
+              {DEMO_CREDENTIALS.map((cred) => (
                 <button
                   key={cred.role}
                   type="button"
-                  onClick={() => fillCredentials(i)}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-left transition-all duration-200 cursor-pointer group/demo"
+                  disabled={loading}
+                  onClick={() => quickLogin(cred)}
+                  className="flex flex-col items-center justify-center px-2 py-3 rounded-xl transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.06)',
+                    background: `${cred.color}22`,
+                    border: `1px solid ${cred.color}55`,
                   }}
                   onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)';
-                    (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.12)';
+                    if (!loading) (e.currentTarget as HTMLElement).style.background = `${cred.color}44`;
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)';
-                    (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.06)';
+                    (e.currentTarget as HTMLElement).style.background = `${cred.color}22`;
                   }}
                 >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
-                      style={{
-                        background: i === 0
-                          ? 'rgba(59, 130, 246, 0.2)'
-                          : 'rgba(168, 85, 247, 0.2)',
-                        color: i === 0 ? '#93c5fd' : '#c4b5fd',
-                      }}
-                    >
-                      {cred.role[0]}
-                    </div>
-                    <div>
-                      <div className="text-xs font-medium text-blue-100/80">{cred.role}</div>
-                      <div className="text-[11px] text-blue-300/40">{cred.email}</div>
-                    </div>
+                  <div
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold mb-1.5"
+                    style={{ background: cred.color, color: '#fff' }}
+                  >
+                    {cred.role[0]}
                   </div>
-                  <div className="text-blue-300/30 group-hover/demo:text-blue-200/60 transition-colors">
-                    {copiedIndex === i ? (
-                      <Check className="h-4 w-4 text-emerald-400" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </div>
+                  <div className="text-xs font-semibold text-white/90">{cred.role}</div>
                 </button>
               ))}
             </div>
+            <p className="text-[10px] text-blue-300/30 text-center mt-3">
+              Tap a role to log in instantly
+            </p>
           </div>
         </div>
 

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { pushToUsers } from '@/lib/push';
 
 // GET /api/messages/threads/[id]?userId= — fetch full thread + messages, mark messages read
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -57,6 +58,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   // Bump thread updatedAt
   await prisma.messageThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
+
+  // Push to other participants (best-effort)
+  (async () => {
+    try {
+      const others = await prisma.threadParticipant.findMany({
+        where: { threadId, userId: { not: senderId } },
+        include: { user: { select: { firstName: true, lastName: true } } },
+      });
+      if (others.length === 0) return;
+      const sender = await prisma.user.findUnique({ where: { id: senderId }, select: { firstName: true, lastName: true } });
+      const senderName = sender ? `${sender.firstName} ${sender.lastName}` : 'Someone';
+      await pushToUsers(others.map(o => o.userId), {
+        title: senderName,
+        body: body.slice(0, 140),
+        data: { type: 'message', threadId },
+      });
+    } catch (e) {
+      console.warn('[message] push failed', e);
+    }
+  })();
 
   return Response.json(message, { status: 201 });
 }

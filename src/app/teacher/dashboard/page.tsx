@@ -49,6 +49,9 @@ export default function TeacherDashboard() {
   }
 
   const totalStudents = teacher?.classSections?.reduce((sum: number, s: any) => sum + (s.students?.length || 0), 0) || 0;
+  const hasSubjects = (teacher?.subjects?.length || 0) > 0;
+  const hasSections = (teacher?.classSections?.length || 0) > 0;
+  const needsSetup = !hasSubjects && !hasSections;
 
   return (
     <DashboardLayout>
@@ -59,6 +62,26 @@ export default function TeacherDashboard() {
           </h1>
           <p className="text-slate-500">Employee ID: {teacher?.employeeId}</p>
         </div>
+
+        {needsSetup && (
+          <div className="bg-amber-50 border border-amber-300 rounded-xl p-5">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">⚠️</div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-amber-900">Setup needed</h3>
+                <p className="text-sm text-amber-800 mt-1">
+                  Your account isn&apos;t linked to any classes or subjects yet, so most pages will show empty data.
+                  Ask your admin to do these in <a href="/academics" className="underline font-medium">Academics</a>:
+                </p>
+                <ul className="text-sm text-amber-800 list-disc list-inside mt-2 space-y-0.5">
+                  <li>Assign you to one or more <strong>Subjects</strong> (so you can enter grades, lesson plans, syllabus, class tests)</li>
+                  <li>Make you a <strong>Class Teacher</strong> of a Section (so you can mark attendance, log behaviour, review leave)</li>
+                  <li>Add you to the <a href="/timetable" className="underline font-medium">Timetable</a> so periods show on your Today page</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Today banner */}
         <a

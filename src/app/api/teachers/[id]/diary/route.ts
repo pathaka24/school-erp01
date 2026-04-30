@@ -24,7 +24,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   });
   if (!teacher) return Response.json({ error: 'Teacher not found' }, { status: 404 });
 
-  const [lessonPlans, classTests] = await Promise.all([
+  const [lessonPlans, classTests, dailyLogs] = await Promise.all([
     prisma.lessonPlan.findMany({
       where: { teacherId, date: { gte: from, lte: to } },
       include: {
@@ -45,22 +45,28 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       },
       orderBy: { date: 'desc' },
     }),
+    prisma.teacherDailyLog.findMany({
+      where: { teacherId, date: { gte: from, lte: to } },
+      orderBy: { date: 'desc' },
+    }),
   ]);
 
   type DayBucket = {
     date: string;
     lessons: typeof lessonPlans;
     tests: typeof classTests;
+    dailyLog: typeof dailyLogs[number] | null;
   };
   const byDate = new Map<string, DayBucket>();
   const ensure = (d: Date): DayBucket => {
     const key = d.toISOString().slice(0, 10);
     let b = byDate.get(key);
-    if (!b) { b = { date: key, lessons: [], tests: [] }; byDate.set(key, b); }
+    if (!b) { b = { date: key, lessons: [], tests: [], dailyLog: null }; byDate.set(key, b); }
     return b;
   };
   for (const lp of lessonPlans) ensure(new Date(lp.date)).lessons.push(lp);
   for (const ct of classTests) ensure(new Date(ct.date)).tests.push(ct);
+  for (const dl of dailyLogs) ensure(new Date(dl.date)).dailyLog = dl;
   const days = Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
 
   return Response.json({
@@ -76,6 +82,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       tests: classTests.length,
       days: days.length,
       completedLessons: lessonPlans.filter(l => l.status === 'COMPLETED').length,
+      dailyLogs: dailyLogs.length,
     },
   });
 }

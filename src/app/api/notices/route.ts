@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { pushToUsers, pushToRoles, pushToAll } from '@/lib/push';
 
 // GET /api/notices?role=&userId=&classId=&sectionId=&studentId=
 // Returns notices visible to the caller. If userId provided, also annotates `read` flag.
@@ -87,5 +88,45 @@ export async function POST(request: NextRequest) {
       section: { select: { id: true, name: true } },
     },
   });
+
+  // Fire push to the audience (best-effort, don't block response)
+  (async () => {
+    try {
+      const payload = { title: notice.title, body: notice.body.slice(0, 140), data: { type: 'notice', id: notice.id } };
+      const aud = notice.audience;
+      if (aud === 'ALL') await pushToAll(payload);
+      else if (aud === 'ADMINS') await pushToRoles(['ADMIN'], payload);
+      else if (aud === 'TEACHERS') await pushToRoles(['TEACHER'], payload);
+      else if (aud === 'PARENTS') await pushToRoles(['PARENT'], payload);
+      else if (aud === 'STUDENTS') await pushToRoles(['STUDENT'], payload);
+      else if (aud === 'CLASS' && notice.classId) {
+        const students = await prisma.student.findMany({
+          where: { classId: notice.classId },
+          select: { user: { select: { id: true } }, parent: { select: { user: { select: { id: true } } } } },
+        });
+        const ids = new Set<string>();
+        for (const s of students) {
+          if (s.user?.id) ids.add(s.user.id);
+          if (s.parent?.user?.id) ids.add(s.parent.user.id);
+        }
+        await pushToUsers(Array.from(ids), payload);
+      }
+      else if (aud === 'SECTION' && notice.sectionId) {
+        const students = await prisma.student.findMany({
+          where: { sectionId: notice.sectionId },
+          select: { user: { select: { id: true } }, parent: { select: { user: { select: { id: true } } } } },
+        });
+        const ids = new Set<string>();
+        for (const s of students) {
+          if (s.user?.id) ids.add(s.user.id);
+          if (s.parent?.user?.id) ids.add(s.parent.user.id);
+        }
+        await pushToUsers(Array.from(ids), payload);
+      }
+    } catch (e) {
+      console.warn('[notice] push failed', e);
+    }
+  })();
+
   return Response.json(notice, { status: 201 });
 }

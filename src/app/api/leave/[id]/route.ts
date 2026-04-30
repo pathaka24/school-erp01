@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { sendEmail, leaveDecisionEmail } from '@/lib/email';
+import { pushToUsers } from '@/lib/push';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -42,6 +44,42 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       },
       include: { student: { select: { id: true } } },
     });
+
+    // Email the parent on a final decision (approve/reject)
+    if (status === 'APPROVED' || status === 'REJECTED') {
+      try {
+        const full = await prisma.leaveApplication.findUnique({
+          where: { id },
+          include: {
+            student: { include: { user: { select: { firstName: true, lastName: true } } } },
+            appliedBy: { select: { email: true, firstName: true, lastName: true } },
+            reviewedBy: { select: { firstName: true, lastName: true } },
+          },
+        });
+        if (full?.appliedBy?.email) {
+          const tpl = leaveDecisionEmail({
+            parentName: `${full.appliedBy.firstName} ${full.appliedBy.lastName}`,
+            studentName: `${full.student.user.firstName} ${full.student.user.lastName}`,
+            fromDate: full.fromDate.toISOString().slice(0, 10),
+            toDate: full.toDate.toISOString().slice(0, 10),
+            status: status as 'APPROVED' | 'REJECTED',
+            reviewNote: reviewNote || undefined,
+            reviewerName: full.reviewedBy ? `${full.reviewedBy.firstName} ${full.reviewedBy.lastName}` : undefined,
+          });
+          await sendEmail({ to: full.appliedBy.email, ...tpl });
+        }
+        // Push to applicant
+        if (full?.appliedById) {
+          await pushToUsers([full.appliedById], {
+            title: `Leave ${status.toLowerCase()}`,
+            body: `${full.student.user.firstName}'s leave (${full.fromDate.toISOString().slice(0,10)} – ${full.toDate.toISOString().slice(0,10)}) was ${status.toLowerCase()}.`,
+            data: { type: 'leave', id: full.id },
+          });
+        }
+      } catch (e) {
+        console.warn('[leave] email send failed', e);
+      }
+    }
 
     // If approved, mark attendance EXCUSED for the date range
     if (status === 'APPROVED') {
