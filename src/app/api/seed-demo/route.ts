@@ -40,16 +40,22 @@ export async function GET() {
       },
     });
 
+    // Find existing Teacher by either userId or employeeId, otherwise create
     let teacherRecord = await prisma.teacher.findUnique({ where: { userId: teacherUser.id } });
     if (!teacherRecord) {
-      teacherRecord = await prisma.teacher.create({
-        data: {
-          userId: teacherUser.id,
-          employeeId: 'EMP-001',
-          qualification: 'M.Ed',
-          experience: 8,
-        },
-      });
+      // Maybe a Teacher already exists with EMP-001 from a partial earlier seed — link it
+      const orphan = await prisma.teacher.findUnique({ where: { employeeId: 'EMP-001' } });
+      if (orphan) {
+        teacherRecord = await prisma.teacher.update({
+          where: { id: orphan.id },
+          data: { userId: teacherUser.id, qualification: 'M.Ed', experience: 8 },
+        });
+        log(`  Linked existing Teacher record (EMP-001) to ${teacherUser.email}`);
+      } else {
+        teacherRecord = await prisma.teacher.create({
+          data: { userId: teacherUser.id, employeeId: 'EMP-001', qualification: 'M.Ed', experience: 8 },
+        });
+      }
     }
     log(`Teacher: ${teacherUser.email} / teacher123 (employeeId: ${teacherRecord.employeeId})`);
 
