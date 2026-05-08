@@ -1,10 +1,24 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { getAuthFromRequest } from '@/lib/auth';
 
-// GET /api/seed-demo — creates Admin, Teacher, Parent demo users idempotently.
-// Open this URL in a browser to seed:
-//   https://school-erp01.vercel.app/api/seed-demo
-export async function GET() {
+// GET /api/seed-demo — bootstrap demo users.
+// Only runs if no users exist (first-time setup) OR if called by an ADMIN.
+// This prevents the route from being abused after the system is in use.
+export async function GET(request: NextRequest) {
+  const userCount = await prisma.user.count();
+  const isFirstRun = userCount === 0;
+  if (!isFirstRun) {
+    const auth = getAuthFromRequest(request);
+    if (!auth || auth.role !== 'ADMIN') {
+      return Response.json(
+        { error: 'Demo seed is locked. System has users — only ADMIN can re-seed.' },
+        { status: 403 },
+      );
+    }
+  }
+
   const logs: string[] = [];
   const log = (msg: string) => { logs.push(msg); console.log(msg); };
 

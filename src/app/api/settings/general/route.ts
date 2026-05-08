@@ -39,10 +39,12 @@ export async function PUT(request: NextRequest) {
   const results = [];
   for (const [key, value] of Object.entries(body)) {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+    // Pass explicit id to avoid the legacy schema default of "default"
+    // (which collides for the second key — UNIQUE constraint on id)
     const setting = await prisma.schoolSettings.upsert({
       where: { key },
       update: { value: stringValue },
-      create: { key, value: stringValue, label: LABELS[key] || key },
+      create: { id: crypto.randomUUID(), key, value: stringValue, label: LABELS[key] || key },
     });
     results.push(setting);
   }

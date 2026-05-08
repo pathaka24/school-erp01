@@ -1,5 +1,7 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireRole } from '@/lib/apiAuth';
 
 const TEACHERS = [
   { firstName: 'Deeksha', lastName: 'Mishra', phone: '9911938387', email: 'kumdarpanditk89@gmail.com', role: '10th', empId: 'EMP-001' },
@@ -21,7 +23,10 @@ const TEACHERS = [
   { firstName: 'Vini', lastName: '', phone: '8205332250', email: null, role: '', empId: 'EMP-017' },
 ];
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
+
   const passwordHash = await bcrypt.hash('password123', 12);
   const results: any[] = [];
   let created = 0;

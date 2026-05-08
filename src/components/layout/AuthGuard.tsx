@@ -3,13 +3,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
+import { pageScope, userHasScope } from '@/lib/clientPermissions';
 
 // Pages accessible by each role
 const ROLE_ROUTES: Record<string, string[]> = {
   ADMIN: ['*'],
-  TEACHER: ['/dashboard', '/teacher', '/attendance', '/timetable', '/exams', '/grades', '/students', '/qr-scan', '/report-card'],
-  PARENT: ['/parent', '/report-card'],
-  STUDENT: ['/student'],
+  STAFF: ['*'],  // STAFF can hit any admin route URL — fine-grained gating is via pageScope below
+  TEACHER: ['/dashboard', '/teacher', '/attendance', '/timetable', '/exams', '/grades', '/students', '/qr-scan', '/report-card', '/profile'],
+  PARENT: ['/parent', '/report-card', '/profile'],
+  STUDENT: ['/student', '/profile'],
 };
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -43,6 +45,21 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
           // Redirect to their home page
           const dest = user.role === 'TEACHER' ? '/teacher/dashboard' : user.role === 'PARENT' ? '/parent' : '/dashboard';
           router.push(dest);
+          return;
+        }
+      }
+
+      // Scope-based route check (for STAFF). ADMIN is allowed everywhere.
+      if (user.role === 'STAFF') {
+        const scope = pageScope(pathname);
+        if (scope && !userHasScope(user.role, user.permissions, scope)) {
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem(
+              'flash',
+              `Access denied to ${pathname}. You don't have the "${scope}" permission.`,
+            );
+          }
+          router.push('/dashboard');
         }
       }
     }

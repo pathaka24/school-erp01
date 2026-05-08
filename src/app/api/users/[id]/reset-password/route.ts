@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireScope } from '@/lib/apiAuth';
 
 function generatePassword() {
   // 12-char alphanumeric, easy to read aloud (no 0/O/1/l/I)
@@ -13,6 +14,9 @@ function generatePassword() {
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireScope(request, 'users');
+  if (auth instanceof Response) return auth;
+
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const { password: providedPassword } = body as { password?: string };

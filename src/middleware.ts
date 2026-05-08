@@ -2,12 +2,10 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { verifyTokenEdge } from '@/lib/auth-edge';
 
-// Public endpoints that bypass auth (login itself + one-shot seed routes for demo)
+// Public endpoints that bypass auth.
+// Only login is public — seed routes are now ADMIN-gated, NOT bypassed.
 const PUBLIC_API_PATHS = [
   '/api/auth/login',
-  '/api/seed',
-  '/api/seed-parent',
-  '/api/seed-demo',
 ];
 
 export async function middleware(request: NextRequest) {

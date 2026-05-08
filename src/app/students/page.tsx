@@ -75,6 +75,39 @@ export default function StudentsPage() {
     } catch { alert('Failed to delete'); }
   };
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const toggle = (id: string) => {
+    setSelected(s => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  const toggleAll = (list: any[]) => {
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map((s: any) => s.id)));
+  };
+
+  const handleBulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} students? They will be deactivated (kept in DB for audit) — recoverable by an admin.`)) return;
+    setBulkDeleting(true);
+    try {
+      await api.post('/students/bulk-delete', { studentIds: Array.from(selected) });
+      setSelected(new Set());
+      if (selectedClass) loadStudents(selectedClass.id, selectedSection || undefined);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Bulk delete failed');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // Clear selection when class/section changes
+  useEffect(() => { setSelected(new Set()); }, [selectedClass, selectedSection]);
+
   const filteredStudents = search
     ? students.filter(s => `${s.user.firstName} ${s.user.lastName} ${s.admissionNo}`.toLowerCase().includes(search.toLowerCase()))
     : students;
@@ -195,6 +228,28 @@ export default function StudentsPage() {
 
               {/* Student cards */}
               <FadeIn delay={0.15}>
+                {/* Bulk action bar — visible when something is selected */}
+                {selected.size > 0 && (
+                  <div className="bg-blue-600 text-white rounded-xl px-4 py-2.5 mb-3 flex items-center justify-between">
+                    <p className="text-sm font-medium">
+                      <strong>{selected.size}</strong> selected
+                    </p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setSelected(new Set())}
+                        className="px-3 py-1 bg-white/10 hover:bg-white/20 rounded text-xs">
+                        Clear
+                      </button>
+                      <button onClick={() => router.push('/students/promote')}
+                        className="px-3 py-1 bg-white text-emerald-700 rounded text-xs font-semibold hover:bg-slate-100">
+                        Promote selected →
+                      </button>
+                      <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                        className="px-3 py-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 rounded text-xs font-semibold">
+                        {bulkDeleting ? 'Deleting…' : `Delete ${selected.size}`}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {studentsLoading ? (
                   <div className="flex items-center justify-center h-32"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div></div>
                 ) : filteredStudents.length === 0 ? (
@@ -204,6 +259,11 @@ export default function StudentsPage() {
                     <table className="w-full">
                       <thead className="bg-slate-50 border-b border-slate-200">
                         <tr>
+                          <th className="text-left px-3 py-3 w-8" onClick={e => e.stopPropagation()}>
+                            <input type="checkbox"
+                              checked={filteredStudents.length > 0 && selected.size === filteredStudents.length}
+                              onChange={() => toggleAll(filteredStudents)} />
+                          </th>
                           <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">#</th>
                           <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Adm. No</th>
                           <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Name</th>
@@ -214,7 +274,10 @@ export default function StudentsPage() {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredStudents.map((student: any, idx: number) => (
-                          <tr key={student.id} className="hover:bg-slate-50 transition cursor-pointer" onClick={() => router.push(`/students/${student.id}`)}>
+                          <tr key={student.id} className={`hover:bg-slate-50 transition cursor-pointer ${selected.has(student.id) ? 'bg-blue-50' : ''}`} onClick={() => router.push(`/students/${student.id}`)}>
+                            <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                              <input type="checkbox" checked={selected.has(student.id)} onChange={() => toggle(student.id)} />
+                            </td>
                             <td className="px-5 py-3 text-sm text-slate-400">{idx + 1}</td>
                             <td className="px-5 py-3">
                               <span className="text-sm font-mono text-blue-600">{student.admissionNo}</span>

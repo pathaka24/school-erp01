@@ -1,8 +1,13 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { bulkChargeSchema, validate } from '@/lib/validations';
+import { recomputeStudentLedger } from '@/lib/feeLedger';
+import { requireScope } from '@/lib/apiAuth';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireScope(request, 'fees');
+  if (auth instanceof Response) return auth;
+
   const body = await request.json();
   const v = validate(bulkChargeSchema, body);
   if ('error' in v) return v.error;
@@ -35,31 +40,16 @@ export async function POST(request: NextRequest) {
   let studentsCharged = 0;
   let studentsSkipped = 0;
 
+  const chargedStudentIds: string[] = [];
+
   for (const student of students) {
-    // Check if this student already has a CHARGE with the same category+month (prevent duplicates)
     const existing = await prisma.feeLedger.findFirst({
       where: {
-        studentId: student.id,
-        month,
-        type: 'CHARGE',
-        category: category || undefined,
+        studentId: student.id, month, type: 'CHARGE',
+        category: category || undefined, voidedAt: null,
       },
     });
-
-    if (existing) {
-      studentsSkipped++;
-      continue;
-    }
-
-    // Get current balance (last feeLedger entry's balanceAfter)
-    const lastEntry = await prisma.feeLedger.findFirst({
-      where: { studentId: student.id },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
-      select: { balanceAfter: true },
-    });
-
-    const currentBalance = lastEntry?.balanceAfter ?? 0;
-    const newBalance = currentBalance + amount;
+    if (existing) { studentsSkipped++; continue; }
 
     await prisma.feeLedger.create({
       data: {
@@ -69,12 +59,17 @@ export async function POST(request: NextRequest) {
         category: category || null,
         description: entryDescription,
         amount,
-        balanceAfter: newBalance,
+        balanceAfter: 0,
         date: safeDate,
       },
     });
-
+    chargedStudentIds.push(student.id);
     studentsCharged++;
+  }
+
+  // Recompute balances + paidAmount for affected students
+  for (const sid of chargedStudentIds) {
+    await recomputeStudentLedger(sid);
   }
 
   const totalAmount = studentsCharged * amount;

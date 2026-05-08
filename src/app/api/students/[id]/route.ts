@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { requireScope } from '@/lib/apiAuth';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -23,6 +24,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireScope(request, 'students');
+  if (auth instanceof Response) return auth;
+
   const { id } = await params;
   const body = await request.json();
 
@@ -72,9 +76,16 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireScope(request, 'students');
+  if (auth instanceof Response) return auth;
+
   const { id } = await params;
   const student = await prisma.student.findUnique({ where: { id } });
   if (!student) return Response.json({ error: 'Student not found' }, { status: 404 });
-  await prisma.user.delete({ where: { id: student.userId } });
-  return Response.json({ message: 'Student deleted' });
+  // Soft delete: deactivate the user instead of hard-deleting (preserves audit trail)
+  await prisma.user.update({
+    where: { id: student.userId },
+    data: { isActive: false, deletedAt: new Date(), deletedBy: auth.userId } as any,
+  });
+  return Response.json({ message: 'Student deactivated' });
 }

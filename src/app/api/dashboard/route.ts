@@ -70,19 +70,20 @@ export async function GET() {
 
     // ── Fee Collection This Month ──────────────────────────
     const monthDeposits = await prisma.feeLedger.aggregate({
-      where: { month: currentMonth, type: 'DEPOSIT' },
+      where: { month: currentMonth, type: 'DEPOSIT', voidedAt: null },
       _sum: { amount: true },
       _count: { id: true },
     });
     const collectedThisMonth = monthDeposits._sum.amount || 0;
 
-    // Total outstanding: sum of the latest balanceAfter per student (> 0 means owing)
-    // Use raw query for efficiency: get each student's latest ledger entry
+    // Total outstanding: sum of the latest balanceAfter per student (> 0 means owing).
+    // balanceAfter on stored rows already excludes voided entries (set to NULL via recompute).
     const outstandingResult = await prisma.$queryRaw<{ total: number | null }[]>`
       SELECT SUM(sub."balanceAfter") as total
       FROM (
         SELECT DISTINCT ON ("studentId") "balanceAfter"
         FROM "fee_ledger"
+        WHERE "voidedAt" IS NULL
         ORDER BY "studentId", "date" DESC, "createdAt" DESC
       ) sub
       WHERE sub."balanceAfter" > 0
@@ -91,7 +92,7 @@ export async function GET() {
 
     // Top 5 recent deposits with student name
     const recentDeposits = await prisma.feeLedger.findMany({
-      where: { type: 'DEPOSIT' },
+      where: { type: 'DEPOSIT', voidedAt: null },
       orderBy: { createdAt: 'desc' },
       take: 5,
       include: {

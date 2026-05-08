@@ -1,7 +1,14 @@
 // Edge-runtime compatible token verifier (uses Web Crypto, not Node crypto).
 // Used by middleware.ts which runs at the edge.
 
-const AUTH_SECRET = process.env.AUTH_SECRET || 'school-erp-secret-key-change-in-production';
+const _envSecret = process.env.AUTH_SECRET;
+if (!_envSecret || _envSecret.length < 32) {
+  throw new Error(
+    'AUTH_SECRET environment variable is required and must be at least 32 characters. ' +
+    'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"',
+  );
+}
+const AUTH_SECRET: string = _envSecret;
 const TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface TokenPayload {

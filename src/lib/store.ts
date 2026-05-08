@@ -5,8 +5,9 @@ interface User {
   email: string;
   firstName: string;
   lastName: string;
-  role: 'ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT';
+  role: 'ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT' | 'STAFF';
   avatar?: string;
+  permissions?: string[];
 }
 
 interface AuthState {

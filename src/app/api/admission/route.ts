@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { recomputeStudentLedger } from '@/lib/feeLedger';
+import { requireScope } from '@/lib/apiAuth';
 
 // GET /api/admission — generate next admission number
 export async function GET() {
@@ -46,8 +48,11 @@ export async function GET() {
   });
 }
 
-// POST /api/admission — create new student admission
+// POST /api/admission — create new student admission. ADMIN only.
 export async function POST(request: NextRequest) {
+  const auth = await requireScope(request, 'admission');
+  if (auth instanceof Response) return auth;
+
   const body = await request.json();
   const {
     // Basic info
@@ -217,6 +222,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Monthly fee for the admission month — pulled from the class's fee plan
+    const feePlanSetting = await prisma.schoolSettings.findUnique({ where: { key: 'feePlan' } });
+    if (feePlanSetting) {
+      try {
+        const plan = JSON.parse(feePlanSetting.value);
+        const classPlan = plan?.classes?.find((c: any) => c.classId === classId);
+        const monthlyFee = Number(classPlan?.monthlyFee) || 0;
+        if (monthlyFee > 0) {
+          balance += monthlyFee;
+          await prisma.feeLedger.create({
+            data: {
+              studentId: student.id, date: now, month: currentMonth,
+              type: 'CHARGE', category: 'MONTHLY_FEE',
+              description: `Monthly Fee - ${new Date(currentMonth + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}`,
+              amount: monthlyFee, balanceAfter: balance,
+            },
+          });
+        }
+      } catch {}
+    }
+
     // Initial deposit (fees paid at admission time)
     let depositReceipt: string | null = null;
     if (initialDeposit && initialDeposit.amount > 0) {
@@ -234,6 +260,10 @@ export async function POST(request: NextRequest) {
         },
       });
     }
+
+    // Single canonical recompute so paidAmount is set on every charge created above
+    const recomputed = await recomputeStudentLedger(student.id);
+    balance = recomputed.balance;
 
     return Response.json({
       ...student,

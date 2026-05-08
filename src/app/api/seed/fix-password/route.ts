@@ -1,8 +1,13 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireRole } from '@/lib/apiAuth';
 
-// Reset all teacher passwords to password123
-export async function GET() {
+// Reset all teacher passwords to password123 — ADMIN only
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
+
   const passwordHash = await bcrypt.hash('password123', 12);
   const teachers = await prisma.teacher.findMany({
     include: { user: { select: { id: true, email: true, firstName: true, lastName: true } } },

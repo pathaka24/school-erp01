@@ -10,53 +10,63 @@ import {
   Calendar, BookOpen, Award, CreditCard, School, ChevronLeft, Menu,
   FileText, UsersRound, Sparkles, BarChart3, Printer, Shield, NotebookPen, IndianRupee, ShoppingBag, Settings,
   Home, QrCode, CalendarCheck, Sun, ClipboardCheck,
-  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen,
+  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen, TrendingUp, ArrowUpCircle, AlertTriangle, Cake,
 } from 'lucide-react';
 import { useState } from 'react';
 
+// `scope` is the permission a STAFF user needs to see this entry. ADMIN bypasses scopes.
+// Items without a scope (like Dashboard) are visible to everyone with role-level access.
 const adminMenu = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'New Admission', href: '/admission', icon: UserPlus },
-  { label: 'Bulk Import', href: '/import', icon: FileSpreadsheet },
-  { label: 'Users', href: '/users', icon: Shield },
-  { label: 'Students', href: '/students', icon: Users },
-  { label: 'Teachers', href: '/teachers', icon: GraduationCap },
-  { label: 'Academics', href: '/academics', icon: BookOpen },
-  { label: 'Notices', href: '/notices', icon: Megaphone },
-  { label: 'Messages', href: '/messages', icon: MessageSquare },
-  { label: 'Calendar', href: '/calendar', icon: Calendar },
-  { label: 'Library', href: '/library', icon: Library },
-  { label: 'Attendance', href: '/attendance', icon: ClipboardList },
-  { label: 'Staff Attendance', href: '/teacher-attendance', icon: CalendarCheck },
-  { label: 'QR Scanner', href: '/qr-scan', icon: QrCode },
-  { label: 'Scholarship Diary', href: '/scholarship-diary', icon: Sparkles },
-  { label: 'Teacher Diary', href: '/teacher-diary', icon: NotebookPen },
-  { label: 'Timetable', href: '/timetable', icon: Calendar },
-  { label: 'Exams', href: '/exams', icon: FileText },
-  { label: 'Exam Timetable', href: '/exam-timetable', icon: Calendar },
-  { label: 'Exam Fees', href: '/exam-fees', icon: IndianRupee },
-  { label: 'Admit Cards', href: '/admit-card', icon: CreditCard },
-  { label: 'Grades', href: '/grades', icon: Award },
-  { label: 'Fees', href: '/fees', icon: CreditCard },
-  { label: 'Finance', href: '/finance', icon: IndianRupee },
-  { label: 'Store', href: '/store', icon: ShoppingBag },
-  { label: 'Family', href: '/family', icon: UsersRound },
-  { label: 'Scholarship', href: '/scholarship', icon: Sparkles },
-  { label: 'Fee Reports', href: '/fee-reports', icon: BarChart3 },
-  { label: 'Report Card', href: '/report-card', icon: Printer },
-  { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'New Admission', href: '/admission', icon: UserPlus, scope: 'admission' },
+  { label: 'Bulk Import', href: '/import', icon: FileSpreadsheet, scope: 'bulkimport' },
+  { label: 'Users', href: '/users', icon: Shield, scope: 'users' },
+  { label: 'Students', href: '/students', icon: Users, scope: 'students' },
+  { label: 'Promote Students', href: '/students/promote', icon: ArrowUpCircle, scope: 'students' },
+  { label: 'Teachers', href: '/teachers', icon: GraduationCap, scope: 'teachers' },
+  { label: 'Academics', href: '/academics', icon: BookOpen, scope: 'academics' },
+  { label: 'Notices', href: '/notices', icon: Megaphone, scope: 'notices' },
+  { label: 'Messages', href: '/messages', icon: MessageSquare, scope: 'messages' },
+  { label: 'Calendar', href: '/calendar', icon: Calendar, scope: 'calendar' },
+  { label: 'Library', href: '/library', icon: Library, scope: 'library' },
+  { label: 'Attendance', href: '/attendance', icon: ClipboardList, scope: 'attendance' },
+  { label: 'Staff Attendance', href: '/teacher-attendance', icon: CalendarCheck, scope: 'teachers' },
+  { label: 'QR Scanner', href: '/qr-scan', icon: QrCode, scope: 'attendance' },
+  { label: 'Scholarship Diary', href: '/scholarship-diary', icon: Sparkles, scope: 'scholarship' },
+  { label: 'Teacher Diary', href: '/teacher-diary', icon: NotebookPen, scope: 'teachers' },
+  { label: 'Timetable', href: '/timetable', icon: Calendar, scope: 'timetable' },
+  { label: 'Exams', href: '/exams', icon: FileText, scope: 'exams' },
+  { label: 'Exam Timetable', href: '/exam-timetable', icon: Calendar, scope: 'exams' },
+  { label: 'Exam Fees', href: '/exam-fees', icon: IndianRupee, scope: 'fees' },
+  { label: 'Admit Cards', href: '/admit-card', icon: CreditCard, scope: 'admitcard' },
+  { label: 'ID Card Maker', href: '/id-maker', icon: CreditCard, scope: 'idcard' },
+  { label: 'Grades', href: '/grades', icon: Award, scope: 'grades' },
+  { label: 'Fees', href: '/fees', icon: CreditCard, scope: 'fees' },
+  { label: 'Register Entry', href: '/fees/register', icon: BookOpen, scope: 'fees' },
+  { label: 'Finance', href: '/finance', icon: IndianRupee, scope: 'finance' },
+  { label: 'Store', href: '/store', icon: ShoppingBag, scope: 'store' },
+  { label: 'Family', href: '/family', icon: UsersRound, scope: 'family' },
+  { label: 'Scholarship', href: '/scholarship', icon: Sparkles, scope: 'scholarship' },
+  { label: 'Fee Reports', href: '/fee-reports', icon: BarChart3, scope: 'reports' },
+  { label: 'Collection Dashboard', href: '/fee-reports/dashboard', icon: TrendingUp, scope: 'reports' },
+  { label: 'Audit Log', href: '/fee-reports/audit-log', icon: Shield, scope: 'reports' },
+  { label: 'Report Card', href: '/report-card', icon: Printer, scope: 'reportcard' },
+  { label: 'Report Card Maker', href: '/report-card-maker', icon: FileText, scope: 'reportcard' },
+  { label: 'Settings', href: '/settings', icon: Settings, scope: 'settings' },
 ];
 
 const teacherMenu = [
   { label: 'Today', href: '/teacher/today', icon: Sun },
   { label: 'Dashboard', href: '/teacher/dashboard', icon: LayoutDashboard },
   { label: 'My Students', href: '/teacher/students', icon: Users },
+  { label: 'My Timetable', href: '/teacher/timetable', icon: Calendar },
+  { label: 'Chronic Absentees', href: '/teacher/absentees', icon: AlertTriangle },
+  { label: 'Birthdays', href: '/teacher/birthdays', icon: Cake },
   { label: 'Notices', href: '/notices', icon: Megaphone },
   { label: 'Messages', href: '/messages', icon: MessageSquare },
   { label: 'Calendar', href: '/calendar', icon: Calendar },
   { label: 'Attendance', href: '/teacher/attendance', icon: ClipboardList },
   { label: 'Leave Requests', href: '/teacher/leave', icon: CalendarOff },
-  { label: 'Timetable', href: '/timetable', icon: Calendar },
   { label: 'Exams', href: '/teacher/exams', icon: FileText },
   { label: 'Grades', href: '/teacher/grades', icon: Award },
   { label: 'Lesson Plans', href: '/teacher/lesson-plans', icon: NotebookPen },
@@ -108,7 +118,19 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const { user } = useAuthStore();
 
-  const menuItems = user?.role === 'TEACHER' ? teacherMenu : user?.role === 'PARENT' ? parentMenu : adminMenu;
+  // Pick base menu by role, then for STAFF filter to only items in their permissions
+  let menuItems: any[];
+  if (user?.role === 'TEACHER') menuItems = teacherMenu;
+  else if (user?.role === 'PARENT') menuItems = parentMenu;
+  else if (user?.role === 'STAFF') {
+    const grants = new Set(user?.permissions || []);
+    menuItems = adminMenu.filter(item =>
+      // Always show Dashboard. Otherwise require the scope to be granted.
+      !('scope' in item) || !item.scope || grants.has(item.scope as string),
+    );
+  } else {
+    menuItems = adminMenu; // ADMIN sees everything
+  }
 
   return (
     <motion.aside

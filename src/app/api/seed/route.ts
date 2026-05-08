@@ -1,5 +1,7 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireRole } from '@/lib/apiAuth';
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -19,8 +21,11 @@ function randomPincode(): string {
   return (100000 + Math.floor(Math.random() * 900000)).toString();
 }
 
-// GET /api/seed — run from browser
-export async function GET() {
+// GET /api/seed — ADMIN-only. Wipes and reseeds the database.
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
+
   const logs: string[] = [];
   const log = (msg: string) => { logs.push(msg); console.log(msg); };
 

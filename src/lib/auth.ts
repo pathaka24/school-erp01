@@ -1,6 +1,16 @@
 import { createHmac } from 'crypto';
 
-const AUTH_SECRET = process.env.AUTH_SECRET || 'school-erp-secret-key-change-in-production';
+// AUTH_SECRET is required. We do NOT fall back to a hardcoded string —
+// that would allow anyone with the source code to forge admin tokens
+// in any deployment that forgot to set the env var.
+const _envSecret = process.env.AUTH_SECRET;
+if (!_envSecret || _envSecret.length < 32) {
+  throw new Error(
+    'AUTH_SECRET environment variable is required and must be at least 32 characters. ' +
+    'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"',
+  );
+}
+const AUTH_SECRET: string = _envSecret;
 
 export interface TokenPayload {
   userId: string;

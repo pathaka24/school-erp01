@@ -1,8 +1,12 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireRole } from '@/lib/apiAuth';
 
-// GET /api/seed-parent — run from browser to seed a parent user
-export async function GET() {
+// GET /api/seed-parent — ADMIN-only. Creates a sample parent user.
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
   const logs: string[] = [];
   const log = (msg: string) => { logs.push(msg); console.log(msg); };
 

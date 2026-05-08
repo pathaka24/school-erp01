@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { requireScope } from '@/lib/apiAuth';
 
 // Fee plan is stored in SchoolSettings as JSON under key "feePlan"
 // Structure: { academicYear, classes: [{ classId, className, monthlyFee, charges: [{ category, description, amount }] }] }
@@ -56,6 +57,9 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const auth = await requireScope(request, 'settings');
+  if (auth instanceof Response) return auth;
+
   const body = await request.json();
   const { academicYear, classes, scholarshipWeights } = body;
 
@@ -75,7 +79,7 @@ export async function PUT(request: NextRequest) {
   await prisma.schoolSettings.upsert({
     where: { key: 'feePlan' },
     update: { value: JSON.stringify(plan) },
-    create: { key: 'feePlan', value: JSON.stringify(plan), label: 'Annual Fee Plan' },
+    create: { id: crypto.randomUUID(), key: 'feePlan', value: JSON.stringify(plan), label: 'Annual Fee Plan' },
   });
 
   // Also create/update FeeStructure records for each class

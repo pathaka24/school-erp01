@@ -1,9 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
 import { motion } from 'framer-motion';
-import { Bell, LogOut } from 'lucide-react';
+import { Bell, LogOut, User as UserIcon } from 'lucide-react';
 
 export default function Header() {
   const { user, logout } = useAuthStore();
@@ -26,20 +27,17 @@ export default function Header() {
       </div>
       <div className="flex items-center gap-4">
         {user && (
-          <motion.div
-            className="flex items-center gap-2"
-            initial={{ opacity: 0, x: 10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.2, duration: 0.4 }}
-          >
+          <Link href="/profile" className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50">
             <span className="text-sm font-medium text-slate-700">{user.firstName} {user.lastName}</span>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
               user.role === 'ADMIN' ? 'bg-red-100 text-red-700' :
               user.role === 'TEACHER' ? 'bg-blue-100 text-blue-700' :
               user.role === 'PARENT' ? 'bg-green-100 text-green-700' :
+              user.role === 'STAFF' ? 'bg-cyan-100 text-cyan-700' :
               'bg-slate-100 text-slate-600'
             }`}>{user.role}</span>
-          </motion.div>
+            <UserIcon className="h-3.5 w-3.5 text-slate-400" />
+          </Link>
         )}
         <motion.button
           className="relative p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full"

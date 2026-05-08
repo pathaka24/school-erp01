@@ -1,0 +1,9 @@
+{
+  "regions": ["sin1"],
+  "crons": [
+    {
+      "path": "/api/fees/ledger/auto-monthly-cron",
+      "schedule": "0 1 1 * *"
+    }
+  ]
+}

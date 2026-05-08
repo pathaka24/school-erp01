@@ -5,11 +5,13 @@ import { useParams, useRouter } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatDate, formatCurrency, getAcademicYears, getCurrentAcademicYear, compressImage } from '@/lib/utils';
+import PhotoCropper from '@/components/PhotoCropper';
 import { ArrowLeft, Save, User, Heart, MapPin, GraduationCap, School, History, Clock, Syringe, FileText, IndianRupee, Printer, BookOpen, CalendarCheck, Award, Camera, X, QrCode } from 'lucide-react';
 import QRCode from 'react-qr-code';
 
 const TABS = [
   { id: 'personal', label: 'Personal', icon: User },
+  { id: 'idcard', label: 'ID Card', icon: QrCode },
   { id: 'parent', label: 'Parent Info', icon: User },
   { id: 'address', label: 'Address', icon: MapPin },
   { id: 'admission', label: 'Admission', icon: GraduationCap },
@@ -35,7 +37,10 @@ export default function StudentProfilePage() {
   const [form, setForm] = useState<any>({});
   const [ledgerData, setLedgerData] = useState<any>(null);
   const [ledgerFamily, setLedgerFamily] = useState(false);
-  const [ledgerView, setLedgerView] = useState<'all' | 'purchases'>('all');
+  const [ledgerView, setLedgerView] = useState<'all' | 'purchases' | 'entries'>('all');
+  const [editingEntry, setEditingEntry] = useState<any>(null);
+  const [entrySaving, setEntrySaving] = useState(false);
+  const [showVoided, setShowVoided] = useState(false);
   const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
   const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
   const [showDepositForm, setShowDepositForm] = useState(false);
@@ -63,7 +68,11 @@ export default function StudentProfilePage() {
   const [diaryForm, setDiaryForm] = useState({ discipline: '', comment: '', attendancePct: '', testMarksPct: '', feeSubmissionPct: '', feeAmount: '', rewardAmount: '', isHoliday: false });
   // Photo
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
   const [showQR, setShowQR] = useState(false);
+  const [idTemplate, setIdTemplate] = useState<any>(null);
+  const [idCardHtml, setIdCardHtml] = useState<string>('');
+  const [schoolLogo, setSchoolLogo] = useState<string>('');
 
   useEffect(() => {
     api.get(`/students/${id}`)
@@ -142,29 +151,30 @@ export default function StudentProfilePage() {
     }
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // File picker → opens cropper (instead of uploading raw file).
+  // Cropper produces the final framed photo, then we compress + upload.
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setPendingPhoto(file);
+    e.target.value = '';
+  };
+
+  const handleCroppedPhoto = async (cropped: File) => {
+    setPendingPhoto(null);
     setUploadingPhoto(true);
     try {
-      const compressed = await compressImage(file, { targetKB: 40, maxDim: 500 });
-      const originalKB = Math.round(file.size / 1024);
-      const compressedKB = Math.round(compressed.size / 1024);
-
+      const compressed = await compressImage(cropped, { targetKB: 40, maxDim: 500 });
       const formData = new FormData();
       formData.append('photo', compressed);
       const { data } = await api.post(`/students/${id}/photo`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setStudent((prev: any) => ({ ...prev, photo: data.photo }));
-      if (originalKB > compressedKB) {
-        console.info(`Photo compressed: ${originalKB}KB → ${compressedKB}KB`);
-      }
     } catch (err: any) {
       alert(err.response?.data?.error || err.message || 'Upload failed');
     }
     setUploadingPhoto(false);
-    e.target.value = '';
   };
 
   const removePhoto = async () => {
@@ -176,7 +186,7 @@ export default function StudentProfilePage() {
 
   const loadLedger = async () => {
     try {
-      const r = await api.get(`/fees/ledger/${id}?family=${ledgerFamily}`);
+      const r = await api.get(`/fees/ledger/${id}?family=${ledgerFamily}&includeVoided=${showVoided}`);
       setLedgerData(r.data);
       // Auto-enable family view if student has siblings
       if (r.data.siblings?.length > 1 && !ledgerFamily) {
@@ -187,7 +197,30 @@ export default function StudentProfilePage() {
 
   useEffect(() => {
     if (activeTab === 'fees') loadLedger();
-  }, [activeTab, ledgerFamily]);
+  }, [activeTab, ledgerFamily, showVoided]);
+
+  // Load default Student ID template + school logo
+  useEffect(() => {
+    api.get('/print-templates', { params: { type: 'STUDENT_ID' } })
+      .then(r => {
+        const list = r.data || [];
+        const def = list.find((t: any) => t.isDefault) || list[0] || null;
+        setIdTemplate(def);
+      })
+      .catch(() => setIdTemplate(null));
+    api.get('/settings/general').then(r => setSchoolLogo(r.data?.schoolLogo || '')).catch(() => {});
+  }, []);
+
+  // Build the preview HTML when modal opens, ID tab is active, or student/template changes
+  useEffect(() => {
+    if (!student) return;
+    if (!showQR && activeTab !== 'idcard') return;
+    (async () => {
+      const { buildIdCardSheetHtml } = await import('@/lib/idCardHtml');
+      const html = await buildIdCardSheetHtml([student], idTemplate, true, schoolLogo);
+      setIdCardHtml(html);
+    })();
+  }, [showQR, activeTab, student, idTemplate, schoolLogo]);
 
   // Attendance
   const loadAttendance = async () => {
@@ -249,6 +282,144 @@ export default function StudentProfilePage() {
     setChargeForm({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
     setShowChargeForm(false);
     loadLedger();
+  };
+
+  const handleEntrySave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEntry) return;
+    setEntrySaving(true);
+    try {
+      await api.patch(`/fees/ledger/entry/${editingEntry.id}`, {
+        type: editingEntry.type,
+        category: editingEntry.category,
+        description: editingEntry.description,
+        amount: parseFloat(editingEntry.amount),
+        month: editingEntry.month,
+        paymentMethod: editingEntry.paymentMethod,
+        receivedBy: editingEntry.receivedBy,
+        receiptNumber: editingEntry.receiptNumber,
+      });
+      setEditingEntry(null);
+      loadLedger();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to update entry');
+    } finally {
+      setEntrySaving(false);
+    }
+  };
+
+  const handleEntryDelete = async (entry: any) => {
+    const reason = prompt(`Void this ${entry.type.toLowerCase()} of ₹${entry.amount}?\n\nThe row will be hidden but kept for audit. Enter a reason:`);
+    if (reason === null) return; // cancelled
+    try {
+      await api.delete(`/fees/ledger/entry/${entry.id}`, { params: { reason: reason || 'No reason given' } });
+      loadLedger();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to void entry');
+    }
+  };
+
+  const handleEntryRestore = async (entry: any) => {
+    if (!confirm(`Restore this voided ${entry.type.toLowerCase()} of ₹${entry.amount}?`)) return;
+    try {
+      await api.post(`/fees/ledger/entry/${entry.id}`, {});
+      loadLedger();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to restore entry');
+    }
+  };
+
+  // Open a printable per-deposit receipt
+  const printDepositReceipt = async (entryId: string) => {
+    let data: any;
+    try {
+      const res = await api.get(`/fees/ledger/entry/${entryId}/receipt`);
+      data = res.data;
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to load receipt');
+      return;
+    }
+    const monthLabel = new Date(data.deposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const fmt = (n: number) => '₹' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const allocationRows = (data.allocation || []).map((a: any) =>
+      `<tr>
+        <td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1">${new Date(a.month + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</td>
+        <td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1">${a.description}</td>
+        <td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1;text-align:right;font-weight:600">${fmt(a.amountPaid)}</td>
+      </tr>`
+    ).join('');
+    const totalAllocated = (data.allocation || []).reduce((s: number, a: any) => s + a.amountPaid, 0);
+    const advanceAmount = data.deposit.amount - totalAllocated;
+
+    const html = `<!DOCTYPE html><html><head><title>Fee Receipt — ${data.deposit.receiptNumber || data.deposit.id.slice(0, 8)}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:Arial,sans-serif;margin:20px;color:#1e293b;font-size:13px}
+  .header{text-align:center;border-bottom:3px solid #1e40af;padding-bottom:12px;margin-bottom:16px}
+  .school{font-size:20px;font-weight:bold;color:#1e40af}
+  .receipt-no{display:inline-block;background:#1e40af;color:white;padding:4px 20px;border-radius:4px;font-size:14px;font-weight:bold;margin:8px 0}
+  .month-pill{display:inline-block;background:#16a34a;color:white;padding:4px 16px;border-radius:20px;font-size:12px;font-weight:bold;margin-left:8px}
+  h3{color:#1e40af;font-size:13px;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:1px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}
+  .field .label{font-size:10px;color:#64748b;text-transform:uppercase}
+  .field .value{font-size:13px;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin:8px 0}
+  th{background:#1e40af;color:white;padding:6px 12px;font-size:11px;text-align:left;text-transform:uppercase}
+  .total-row td{background:#dcfce7;font-weight:bold;font-size:14px}
+  .balance-box{border:3px solid;border-radius:8px;padding:12px;text-align:center;margin:12px 0;font-size:16px;font-weight:bold}
+  .sig-row{display:flex;justify-content:space-between;margin-top:40px}
+  .sig-line{border-top:1px solid #000;width:180px;text-align:center;padding-top:4px;font-size:11px}
+  @media print{body{margin:10px}}
+</style></head><body>
+  <div class="header">
+    <div class="school">${data.schoolName}</div>
+    <div style="font-size:14px;font-weight:bold;color:#1e293b;margin-top:6px">FEE RECEIPT <span class="month-pill">${monthLabel}</span></div>
+    <div class="receipt-no">${data.deposit.receiptNumber || 'RCP-' + data.deposit.id.slice(0, 8).toUpperCase()}</div>
+    <div style="font-size:11px;color:#666">Date: ${new Date(data.deposit.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+  </div>
+
+  <h3>Student</h3>
+  <div class="grid">
+    <div class="field"><div class="label">Name</div><div class="value">${data.student.name}</div></div>
+    <div class="field"><div class="label">Admission No</div><div class="value">${data.student.admissionNo}</div></div>
+    <div class="field"><div class="label">Class</div><div class="value">${data.student.class || '—'}${data.student.section ? ' · ' + data.student.section : ''}</div></div>
+    <div class="field"><div class="label">Month</div><div class="value">${monthLabel}</div></div>
+  </div>
+
+  <h3>Payment</h3>
+  <div class="grid">
+    <div class="field"><div class="label">Amount Paid</div><div class="value" style="color:#16a34a;font-size:16px">${fmt(data.deposit.amount)}</div></div>
+    <div class="field"><div class="label">Method</div><div class="value">${data.deposit.paymentMethod || 'CASH'}</div></div>
+    ${data.deposit.receivedBy ? `<div class="field"><div class="label">Received By</div><div class="value">${data.deposit.receivedBy}</div></div>` : ''}
+    <div class="field"><div class="label">Balance Before</div><div class="value">${fmt(data.balanceBeforeDeposit)}</div></div>
+  </div>
+
+  ${allocationRows ? `
+    <h3>Applied To Charges (FIFO)</h3>
+    <table>
+      <thead><tr><th>Month</th><th>Description</th><th style="text-align:right;width:25%">Paid</th></tr></thead>
+      <tbody>
+        ${allocationRows}
+        ${advanceAmount > 0.01 ? `<tr><td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1;font-style:italic;color:#92400e" colspan="2">Advance (carried forward)</td><td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1;text-align:right;font-weight:600;color:#92400e">${fmt(advanceAmount)}</td></tr>` : ''}
+        <tr class="total-row">
+          <td style="padding:8px 12px;border:1px solid #cbd5e1;font-size:14px" colspan="2">Total Paid</td>
+          <td style="padding:8px 12px;border:1px solid #cbd5e1;text-align:right;font-size:14px">${fmt(data.deposit.amount)}</td>
+        </tr>
+      </tbody>
+    </table>
+  ` : `<p style="font-style:italic;color:#92400e;margin-top:8px">This deposit has been carried forward as advance — no outstanding charges at the time of payment.</p>`}
+
+  <div class="balance-box" style="border-color:${data.currentBalance > 0 ? '#dc2626' : '#16a34a'};color:${data.currentBalance > 0 ? '#dc2626' : '#16a34a'}">
+    Current Balance: ${fmt(data.currentBalance)} ${data.currentBalance > 0 ? 'DUE' : 'CLEARED'}
+  </div>
+
+  <div class="sig-row">
+    <div class="sig-line">Parent's Signature</div>
+    <div class="sig-line">Accountant</div>
+  </div>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
   };
 
   const handleOpeningBalance = async (e: React.FormEvent) => {
@@ -973,6 +1144,62 @@ export default function StudentProfilePage() {
             </div>
           )}
 
+          {/* ID CARD TAB — visible card + Print, uses the active Student ID template */}
+          {activeTab === 'idcard' && (
+            <div className="space-y-4">
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">Student ID Card</h2>
+                    <p className="text-xs text-slate-500">
+                      {idTemplate ? <>Using template: <strong className="text-slate-700">{idTemplate.name}</strong></> : 'No template configured — using defaults'}
+                      {' · '}
+                      <a href="/settings" className="text-blue-600 hover:underline">Change in Settings → Print Templates</a>
+                    </p>
+                  </div>
+                  <button onClick={async () => {
+                    if (!student) return;
+                    const { printIdCards } = await import('@/lib/idCardHtml');
+                    await printIdCards([student], idTemplate, true, schoolLogo);
+                  }}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+                    <Printer className="h-4 w-4" /> Print ID Card
+                  </button>
+                </div>
+
+                <div className="bg-slate-50 rounded-lg p-6 flex justify-center">
+                  {idCardHtml ? (
+                    <iframe
+                      title="student-id-card"
+                      srcDoc={idCardHtml}
+                      style={{
+                        width: idTemplate?.config?.orientation === 'landscape' ? 360 : 240,
+                        height: idTemplate?.config?.orientation === 'landscape' ? 240 : 380,
+                        border: 'none',
+                        background: 'white',
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                        borderRadius: 8,
+                      }}
+                    />
+                  ) : (
+                    <p className="text-sm text-slate-400 py-12">Generating ID card preview…</p>
+                  )}
+                </div>
+
+                {!student?.photo && (
+                  <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                    <strong>No photo uploaded.</strong> The card will show initials. Upload a photo on the Personal tab for a proper ID card.
+                  </div>
+                )}
+                {idTemplate?.config?.backEnabled && (
+                  <div className="mt-3 text-xs text-slate-500">
+                    Back side is enabled — both front and back will print together.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* PARENT INFO TAB */}
           {activeTab === 'parent' && (
             <div className="space-y-6">
@@ -1583,6 +1810,10 @@ export default function StudentProfilePage() {
                     className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'purchases' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                     Purchases Only (Dress / Tie / Belt / Books / Copy / Dairy)
                   </button>
+                  <button onClick={() => setLedgerView('entries')}
+                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'entries' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                    All Entries (Edit / Delete)
+                  </button>
                 </div>
               )}
 
@@ -1777,6 +2008,23 @@ export default function StudentProfilePage() {
                 };
                 let lastYear = '';
 
+                // Pre-pass: per-row payment status using cumulative totals.
+                // monthlyFeePaid = cumulative deposits ≥ cumulative monthly fees through this row
+                // rowPaymentStatus tracks whether running balance after this row is cleared
+                let cumMonthlyFee = 0;
+                let cumDeposits = 0;
+                const decoratedRows = ledgerData.ledger.map((row: any) => {
+                  cumMonthlyFee += row.monthlyFee || 0;
+                  cumDeposits += row.deposited || 0;
+                  const monthlyFeePaid = row.monthlyFee > 0 && cumDeposits >= cumMonthlyFee;
+                  let status: 'PAID' | 'PARTIAL' | 'DUE' | 'NONE';
+                  if (row.monthlyFee === 0 && row.otherCharges === 0 && row.deposited === 0) status = 'NONE';
+                  else if (row.balance <= 0) status = 'PAID';
+                  else if (cumDeposits > 0 || row.deposited > 0) status = 'PARTIAL';
+                  else status = 'DUE';
+                  return { ...row, monthlyFeePaid, status };
+                });
+
                 return (
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
                     <table className="w-full">
@@ -1788,29 +2036,36 @@ export default function StudentProfilePage() {
                           <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Total Due</th>
                           <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Deposited</th>
                           <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Balance</th>
+                          <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Status</th>
                           <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Date / Sign</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {ledgerData.ledger.map((row: any) => {
+                        {decoratedRows.map((row: any) => {
                           const year = getAcademicYear(row.month);
                           const showYearHeader = year !== lastYear;
                           lastYear = year;
                           const isPrevBalance = row.monthlyFee === 0 && row.otherCharges > 0 && row.otherDetails.some((d: string) => d.toLowerCase().includes('previous') || d.toLowerCase().includes('opening'));
+                          const rowTint = row.status === 'PAID' ? 'bg-green-50/50' : row.status === 'PARTIAL' ? 'bg-amber-50/40' : '';
 
                           return (
                             <>{showYearHeader && (
                               <tr key={`year-${year}`} className="bg-blue-50">
-                                <td colSpan={7} className="px-4 py-2 text-sm font-bold text-blue-700">Academic Year {year}</td>
+                                <td colSpan={8} className="px-4 py-2 text-sm font-bold text-blue-700">Academic Year {year}</td>
                               </tr>
                             )}
-                            <tr key={row.month} className={`hover:bg-slate-50 ${isPrevBalance ? 'bg-purple-50' : ''}`}>
+                            <tr key={row.month} className={`hover:bg-slate-50 ${isPrevBalance ? 'bg-purple-50' : rowTint}`}>
                               <td className="px-4 py-3 text-sm font-medium text-slate-900">
                                 {new Date(row.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                                 {isPrevBalance && <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Prev. Balance</span>}
                               </td>
-                              <td className="px-4 py-3 text-sm text-slate-700 text-right">
-                                {row.monthlyFee > 0 ? formatCurrency(row.monthlyFee) : '—'}
+                              <td className={`px-4 py-3 text-sm text-right ${row.monthlyFeePaid ? 'text-green-700 font-semibold' : 'text-slate-700'}`}>
+                                {row.monthlyFee > 0 ? (
+                                  <span className={row.monthlyFeePaid ? 'inline-flex items-center gap-1' : ''}>
+                                    <span className={row.monthlyFeePaid ? 'line-through opacity-70' : ''}>{formatCurrency(row.monthlyFee)}</span>
+                                    {row.monthlyFeePaid && <span className="text-green-600">✓</span>}
+                                  </span>
+                                ) : '—'}
                               </td>
                               <td className="px-4 py-3 text-sm text-right">
                                 {row.otherCharges > 0 ? (
@@ -1830,13 +2085,29 @@ export default function StudentProfilePage() {
                               <td className={`px-4 py-3 text-sm font-bold text-right ${row.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
                                 {formatCurrency(row.balance)}
                               </td>
+                              <td className="px-4 py-3">
+                                {row.status === 'PAID' && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">PAID</span>}
+                                {row.status === 'PARTIAL' && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold">PARTIAL</span>}
+                                {row.status === 'DUE' && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">DUE</span>}
+                                {row.status === 'NONE' && <span className="text-slate-300 text-xs">—</span>}
+                              </td>
                               <td className="px-4 py-3 text-xs text-slate-400">
-                                {row.depositDates.length > 0 && (
-                                  <div>{new Date(row.depositDates[0]).toLocaleDateString('en-IN')}</div>
-                                )}
-                                {row.depositMethods.length > 0 && (
-                                  <div>{row.depositMethods[0]}</div>
-                                )}
+                                {(ledgerData?.entries || [])
+                                  .filter((d: any) => d.type === 'DEPOSIT' && d.month === row.month && !d.voidedAt)
+                                  .map((d: any) => (
+                                    <div key={d.id} className="flex items-center justify-between gap-2 mb-1 last:mb-0">
+                                      <div>
+                                        <div>{new Date(d.date).toLocaleDateString('en-IN')}</div>
+                                        <div className="text-slate-500">{d.paymentMethod || '—'}</div>
+                                      </div>
+                                      <button onClick={() => printDepositReceipt(d.id)}
+                                        title="Print receipt"
+                                        className="p-1 rounded hover:bg-purple-50 text-purple-600 hover:text-purple-800">
+                                        <Printer className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                {(!row.depositDates?.length) && <span className="text-slate-300">—</span>}
                               </td>
                             </tr></>
                           );
@@ -1849,6 +2120,11 @@ export default function StudentProfilePage() {
                           <td className="px-4 py-3 text-sm font-bold text-slate-900 text-right">{formatCurrency(ledgerData.totals?.totalCharged || 0)}</td>
                           <td className="px-4 py-3 text-sm font-bold text-green-600 text-right">{formatCurrency(ledgerData.totals?.totalDeposited || 0)}</td>
                           <td className={`px-4 py-3 text-sm font-bold text-right ${ledgerData.currentBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(ledgerData.currentBalance)}</td>
+                          <td>
+                            {ledgerData.currentBalance <= 0
+                              ? <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">ALL PAID</span>
+                              : <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">{formatCurrency(ledgerData.currentBalance)} DUE</span>}
+                          </td>
                           <td></td>
                         </tr>
                       </tbody>
@@ -1960,6 +2236,195 @@ export default function StudentProfilePage() {
                   </div>
                 );
               })()}
+
+              {/* All entries view — editable */}
+              {ledgerView === 'entries' && (() => {
+                return (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-200 bg-amber-50 flex items-center justify-between flex-wrap gap-2">
+                    <p className="text-xs text-amber-800">
+                      <strong>Edit mode:</strong> Delete = void (kept for audit, can be restored). Status uses persisted FIFO (oldest charges paid first).
+                    </p>
+                    <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                      <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
+                      Show voided entries
+                    </label>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Date</th>
+                          <th className="px-3 py-2 text-left">Month</th>
+                          <th className="px-3 py-2 text-left">Type</th>
+                          <th className="px-3 py-2 text-left">Category</th>
+                          <th className="px-3 py-2 text-left">Description</th>
+                          <th className="px-3 py-2 text-right">Amount</th>
+                          <th className="px-3 py-2 text-left">Status</th>
+                          <th className="px-3 py-2 text-left">Method / Receipt</th>
+                          <th className="px-3 py-2 text-right">Balance After</th>
+                          <th className="px-3 py-2 text-right w-24">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(ledgerData?.entries || []).map((e: any) => {
+                          const paid = e.paidAmount ?? 0;
+                          const isCharge = e.type === 'CHARGE';
+                          const isVoided = !!e.voidedAt;
+                          const fullyPaid = isCharge && !isVoided && paid >= e.amount - 0.01;
+                          const partial = isCharge && !isVoided && paid > 0 && !fullyPaid;
+                          const rowTint = isVoided ? 'bg-slate-100/60 opacity-60' : fullyPaid ? 'bg-green-50/40' : partial ? 'bg-amber-50/30' : '';
+                          return (
+                            <tr key={e.id} className={`hover:bg-slate-50 ${rowTint}`}>
+                              <td className="px-3 py-2 text-slate-700">{new Date(e.date).toLocaleDateString('en-IN')}</td>
+                              <td className="px-3 py-2 text-slate-700">{e.month}</td>
+                              <td className="px-3 py-2">
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                                  isCharge ? 'bg-orange-100 text-orange-700' :
+                                  e.type === 'DISCOUNT' ? 'bg-pink-100 text-pink-700' :
+                                  'bg-green-100 text-green-700'
+                                }`}>
+                                  {e.type}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-slate-700 text-xs">{e.category || '—'}</td>
+                              <td className="px-3 py-2 text-slate-700">
+                                {e.description}
+                                {isVoided && <div className="text-[10px] text-red-600 mt-0.5">Voided: {e.voidReason || 'no reason'}</div>}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-semibold ${isVoided ? 'text-slate-400 line-through' : fullyPaid ? 'text-green-700 line-through opacity-70' : 'text-slate-900'}`}>
+                                {formatCurrency(e.amount)}
+                              </td>
+                              <td className="px-3 py-2">
+                                {isVoided ? (
+                                  <span className="px-2 py-0.5 bg-slate-200 text-slate-600 rounded-full text-xs font-semibold">VOIDED</span>
+                                ) : isCharge ? (
+                                  fullyPaid
+                                    ? <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">PAID</span>
+                                    : partial
+                                      ? <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full text-xs font-semibold" title={`Paid ${formatCurrency(paid)} of ${formatCurrency(e.amount)}`}>PARTIAL</span>
+                                      : <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">DUE</span>
+                                ) : <span className="text-slate-300 text-xs">—</span>}
+                              </td>
+                              <td className="px-3 py-2 text-xs text-slate-500">
+                                {e.paymentMethod && <div>{e.paymentMethod}</div>}
+                                {e.receiptNumber && <div className="text-slate-400">{e.receiptNumber}</div>}
+                              </td>
+                              <td className="px-3 py-2 text-right text-slate-600">{formatCurrency(e.balanceAfter)}</td>
+                              <td className="px-3 py-2 text-right">
+                                <div className="flex gap-1 justify-end flex-wrap">
+                                  {isVoided ? (
+                                    <button onClick={() => handleEntryRestore(e)}
+                                      className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Restore</button>
+                                  ) : (
+                                    <>
+                                      {!isCharge && (
+                                        <button onClick={() => printDepositReceipt(e.id)}
+                                          className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200">Print</button>
+                                      )}
+                                      <button onClick={() => setEditingEntry({ ...e, amount: String(e.amount) })}
+                                        className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Edit</button>
+                                      <button onClick={() => handleEntryDelete(e)}
+                                        className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">Void</button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {(!ledgerData?.entries || ledgerData.entries.length === 0) && (
+                          <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400 text-sm">No entries yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                );
+              })()}
+
+              {/* Edit entry modal */}
+              {editingEntry && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setEditingEntry(null)}>
+                  <form onSubmit={handleEntrySave} onClick={e => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold text-slate-900">Edit Ledger Entry</h3>
+                      <button type="button" onClick={() => setEditingEntry(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs text-slate-600">
+                        Type
+                        <select value={editingEntry.type}
+                          onChange={ev => setEditingEntry({ ...editingEntry, type: ev.target.value })}
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                          <option value="CHARGE">CHARGE</option>
+                          <option value="DEPOSIT">DEPOSIT</option>
+                        </select>
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Month (YYYY-MM)
+                        <input type="month" value={editingEntry.month}
+                          onChange={ev => setEditingEntry({ ...editingEntry, month: ev.target.value })}
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Category
+                        <select value={editingEntry.category || ''}
+                          onChange={ev => setEditingEntry({ ...editingEntry, category: ev.target.value })}
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                          <option value="">—</option>
+                          {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'AD_HOC', 'PREVIOUS_BALANCE', 'DEPOSIT'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Amount (₹)
+                        <input type="number" step="0.01" value={editingEntry.amount}
+                          onChange={ev => setEditingEntry({ ...editingEntry, amount: ev.target.value })}
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                      </label>
+                      <label className="text-xs text-slate-600 col-span-2">
+                        Description
+                        <input value={editingEntry.description}
+                          onChange={ev => setEditingEntry({ ...editingEntry, description: ev.target.value })}
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      </label>
+                      {editingEntry.type === 'DEPOSIT' && (
+                        <>
+                          <label className="text-xs text-slate-600">
+                            Payment Method
+                            <select value={editingEntry.paymentMethod || ''}
+                              onChange={ev => setEditingEntry({ ...editingEntry, paymentMethod: ev.target.value })}
+                              className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                              <option value="">—</option>
+                              {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                            </select>
+                          </label>
+                          <label className="text-xs text-slate-600">
+                            Received By
+                            <input value={editingEntry.receivedBy || ''}
+                              onChange={ev => setEditingEntry({ ...editingEntry, receivedBy: ev.target.value })}
+                              className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
+                          <label className="text-xs text-slate-600 col-span-2">
+                            Receipt Number
+                            <input value={editingEntry.receiptNumber || ''}
+                              onChange={ev => setEditingEntry({ ...editingEntry, receiptNumber: ev.target.value })}
+                              className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
+                        </>
+                      )}
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button type="button" onClick={() => setEditingEntry(null)}
+                        className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                      <button type="submit" disabled={entrySaving}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+                        {entrySaving ? 'Saving...' : 'Save Changes'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
             </div>
           )}
 
@@ -2224,67 +2689,57 @@ export default function StudentProfilePage() {
         </div>
       </div>
 
-      {/* QR Code / ID Card Modal */}
+      {/* Photo cropper — appears when a file is picked, before upload */}
+      {pendingPhoto && (
+        <PhotoCropper
+          file={pendingPhoto}
+          aspect={3 / 4}
+          outputW={600}
+          onCancel={() => setPendingPhoto(null)}
+          onConfirm={handleCroppedPhoto}
+        />
+      )}
+
+      {/* ID Card Modal — uses the active Student ID template from Settings */}
       {showQR && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowQR(false)}>
           <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
-            {/* ID Card Preview */}
-            <div id="student-id-card" className="p-6">
-              <div className="border-2 border-blue-800 rounded-xl overflow-hidden">
-                {/* Card Header */}
-                <div className="text-center py-3 text-white" style={{ background: '#006400' }}>
-                  <p className="text-sm font-bold tracking-wider">PATHAK EDUCATIONAL FOUNDATION SCHOOL</p>
-                  <p className="text-[10px] opacity-80">Salarpur, Sector - 101</p>
-                </div>
-                {/* Card Body */}
-                <div className="p-4 flex gap-4">
-                  <div className="flex-1">
-                    {student?.photo ? (
-                      <img src={student.photo} alt="" className="w-24 h-28 object-cover rounded-lg border border-slate-200" />
-                    ) : (
-                      <div className="w-24 h-28 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-2xl font-bold">
-                        {form.firstName?.[0]}{form.lastName?.[0]}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 text-xs space-y-1.5">
-                    <div><span className="text-slate-400">Name</span><p className="font-bold text-slate-900">{form.firstName} {form.lastName}</p></div>
-                    <div><span className="text-slate-400">Class</span><p className="font-bold text-slate-900">{student?.class?.name} - {student?.section?.name}</p></div>
-                    <div><span className="text-slate-400">Adm. No</span><p className="font-bold text-blue-700">{student?.admissionNo}</p></div>
-                    <div><span className="text-slate-400">Father</span><p className="font-bold text-slate-900">{form.fatherName || '—'}</p></div>
-                  </div>
-                </div>
-                {/* QR Code */}
-                <div className="flex items-center justify-center pb-4">
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <QRCode value={`STU:${id}`} size={100} />
-                  </div>
-                </div>
-                {/* Card Footer */}
-                <div className="text-center py-2 bg-slate-100 text-[10px] text-slate-500">
-                  Session {getCurrentAcademicYear()} | Scan for attendance
-                </div>
+            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">ID Card Preview</p>
+                <p className="text-[11px] text-slate-500">
+                  {idTemplate ? <>Template: <strong>{idTemplate.name}</strong></> : 'No template configured — using defaults'}
+                </p>
               </div>
+              <button onClick={() => setShowQR(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">✕</button>
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-2 px-6 pb-6">
-              <button onClick={() => {
-                const el = document.getElementById('student-id-card');
-                if (!el) return;
-                const w = window.open('', '_blank');
-                if (!w) return;
-                w.document.write(`<html><head><title>ID Card - ${form.firstName} ${form.lastName}</title>
-                  <style>body{margin:20px;font-family:Arial,sans-serif}@media print{body{margin:10px}}</style>
-                </head><body>${el.innerHTML}</body></html>`);
-                w.document.close();
-                w.print();
+            <div className="p-5 bg-slate-50 flex justify-center overflow-auto max-h-[60vh]">
+              {idCardHtml ? (
+                <iframe
+                  title="id-card-preview"
+                  srcDoc={idCardHtml}
+                  style={{ width: 240, height: 380, border: 'none', background: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                />
+              ) : (
+                <p className="text-sm text-slate-400 py-8">Generating preview…</p>
+              )}
+            </div>
+
+            <div className="flex gap-2 px-5 pb-5">
+              <button onClick={async () => {
+                if (!student) return;
+                const { printIdCards } = await import('@/lib/idCardHtml');
+                await printIdCards([student], idTemplate, true, schoolLogo);
               }} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
                 <Printer className="h-4 w-4" /> Print ID Card
               </button>
               <button onClick={() => setShowQR(false)} className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 text-sm">
                 Close
               </button>
+            </div>
+            <div className="px-5 pb-3 text-[11px] text-slate-400 text-center">
+              Change the design at <strong>Settings → Print Templates</strong>
             </div>
           </div>
         </div>

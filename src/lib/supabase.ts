@@ -19,3 +19,4 @@ export function getSupabaseAdmin() {
 }
 
 export const STUDENT_PHOTOS_BUCKET = 'student-photos';
+export const TEMPLATE_ASSETS_BUCKET = 'template-assets';

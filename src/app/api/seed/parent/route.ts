@@ -1,7 +1,12 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireRole } from '@/lib/apiAuth';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
+
   try {
     const passwordHash = await bcrypt.hash('password123', 12);
 

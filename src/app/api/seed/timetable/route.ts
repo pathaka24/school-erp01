@@ -1,4 +1,6 @@
+import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
+import { requireRole } from '@/lib/apiAuth';
 
 // Period times (8 periods per day)
 const PERIOD_TIMES = [
@@ -117,7 +119,10 @@ const TIMETABLE_DATA: Record<string, { subject: string; teacher: string }[]> = {
 // Class 10 has gaps — map period index to actual period slot
 const CLASS10_PERIOD_MAP = [0, 1, 3, 4, 5, 7]; // skip period III (2) and VII (6)
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = requireRole(request, ['ADMIN']);
+  if (auth instanceof Response) return auth;
+
   try {
     // Load all classes, sections, teachers
     const classes = await prisma.class.findMany({ include: { sections: true } });

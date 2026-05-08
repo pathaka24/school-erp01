@@ -11,7 +11,7 @@ datasource db {
 // ─── School Settings ───────────────────────────────────────
 
 model SchoolSettings {
-  id    String @id @default("default")
+  id    String @id @default(uuid())
   key   String @unique
   value String // JSON string for complex values
   label String // human-readable name
@@ -53,6 +53,7 @@ enum Role {
   TEACHER
   STUDENT
   PARENT
+  STAFF        // generic staff (accountant, receptionist, etc.) — access governed by User.permissions
 }
 
 enum Gender {
@@ -181,12 +182,17 @@ model User {
   phone        String?
   avatar       String?
   isActive     Boolean  @default(true)
+  permissions  String[] @default([])  // feature scopes — only used for STAFF role; ADMIN gets all, others use role defaults
+  // Soft delete
+  deletedAt    DateTime?
+  deletedBy    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   student Student?
   teacher Teacher?
   parent  Parent?
+  sessions Session[]
 
   noticesAuthored      Notice[]            @relation("NoticeAuthor")
   noticeReads          NoticeRead[]
@@ -199,6 +205,24 @@ model User {
   pushTokens           PushToken[]
 
   @@map("users")
+}
+
+// Opaque server-side session — token is a random UUID stored in DB.
+// Authorization: Bearer <token> headers are looked up here; the token
+// itself carries no role or claim — role is read from User on each request.
+model Session {
+  token     String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+  ip        String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
 }
 
 model PushToken {
@@ -868,20 +892,60 @@ model FeeLedger {
   studentId     String
   date          DateTime @default(now())
   month         String   // "2025-04", "2025-05"
-  type          String   // CHARGE, DEPOSIT
-  category      String?  // MONTHLY_FEE, ANNUAL, BOOK, DRESS, TRANSPORT, AD_HOC, PREVIOUS_BALANCE
+  type          String   // CHARGE, DEPOSIT, DISCOUNT
+  category      String?  // MONTHLY_FEE, ANNUAL, BOOK, DRESS, TRANSPORT, AD_HOC, PREVIOUS_BALANCE, SIBLING_DISCOUNT, MERIT_DISCOUNT
   description   String   // "Monthly Fee - April", "Book Charge", "Deposit via UPI"
   amount        Float    // always positive
-  balanceAfter  Float    // running balance after this entry
+  balanceAfter  Float    // running balance after this entry (excludes voided)
+  paidAmount    Float    @default(0) // for CHARGE rows: how much has been paid via FIFO; for DEPOSIT: 0
   paymentMethod String?  // for deposits: UPI, CASH, CARD, NET_BANKING, CHEQUE, DD
   receiptNumber String?  @unique
   receivedBy    String?  // who signed/received
   createdAt     DateTime @default(now())
 
+  // Soft delete
+  voidedAt      DateTime?
+  voidedBy      String?  // user id or name
+  voidReason    String?
+
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([studentId, month])
+  @@index([studentId, voidedAt])
   @@map("fee_ledger")
+}
+
+// Configurable print templates for ID cards, admit cards, report cards.
+// Multiple named templates per type are allowed (e.g. "Junior ID" + "Senior ID").
+// `config` is a JSON blob whose shape depends on `type`.
+model PrintTemplate {
+  id        String   @id @default(uuid())
+  name      String   // user-visible label, e.g. "Junior Student ID"
+  type      String   // STUDENT_ID, TEACHER_ID, ADMIT_CARD, REPORT_CARD
+  config    String   // JSON blob — see web/src/lib/printTemplates.ts for shape
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@map("print_templates")
+}
+
+model FeeLedgerAudit {
+  id          String   @id @default(uuid())
+  entryId     String   // soft FK — entry might still exist (PATCH) or be voided (DELETE/VOID)
+  studentId   String   // denormalized for reporting
+  action      String   // CREATE, UPDATE, VOID, RESTORE
+  before      String?  // JSON snapshot before change
+  after       String?  // JSON snapshot after change
+  userId      String?  // who did it
+  userName    String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([entryId])
+  @@index([studentId, createdAt])
+  @@map("fee_ledger_audit")
 }
 
 model MonthlyReport {

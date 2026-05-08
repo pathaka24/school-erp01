@@ -1,8 +1,13 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { ledgerDepositSchema, validate } from '@/lib/validations';
+import { recomputeStudentLedger } from '@/lib/feeLedger';
+import { requireScope } from '@/lib/apiAuth';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireScope(request, 'fees');
+  if (auth instanceof Response) return auth;
+
   const body = await request.json();
   // Accept either validated schema or raw body with perStudentAmounts
   const { studentIds, month, amount, paymentMethod, receivedBy, splitEvenly, perStudentAmounts } = body;
@@ -60,14 +65,14 @@ export async function POST(request: NextRequest) {
     }).filter(Boolean)
   );
 
-  // Recalculate balances for affected students
-  for (const studentId of studentIds) {
-    await recalculateBalance(studentId);
+  // Recompute balances + paidAmount (FIFO) for affected students
+  for (const studentId of studentIds as string[]) {
+    await recomputeStudentLedger(studentId);
   }
 
   // Fetch updated entries
   const updatedEntries = await prisma.feeLedger.findMany({
-    where: { id: { in: entries.map(e => e.id) } },
+    where: { id: { in: entries.map((e: any) => e.id) } },
     include: { student: { include: { user: { select: { firstName: true, lastName: true } } } } },
   });
 
@@ -77,26 +82,4 @@ export async function POST(request: NextRequest) {
     totalDeposited: amount,
     method: paymentMethod,
   }, { status: 201 });
-}
-
-async function recalculateBalance(studentId: string) {
-  const allEntries = await prisma.feeLedger.findMany({
-    where: { studentId },
-    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
-  });
-
-  let balance = 0;
-  for (const entry of allEntries) {
-    if (entry.type === 'CHARGE') {
-      balance += entry.amount;
-    } else {
-      balance -= entry.amount;
-    }
-    if (entry.balanceAfter !== balance) {
-      await prisma.feeLedger.update({
-        where: { id: entry.id },
-        data: { balanceAfter: balance },
-      });
-    }
-  }
 }

@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, compressImage } from '@/lib/utils';
 import { ArrowLeft, Save, User, BookOpen, GraduationCap, Calendar, Camera, Printer, MapPin, CreditCard, Clock, CalendarCheck, QrCode } from 'lucide-react';
 import QRCode from 'react-qr-code';
+import PhotoCropper from '@/components/PhotoCropper';
 
 const TABS = [
   { id: 'personal', label: 'Personal', icon: User },
+  { id: 'idcard', label: 'ID Card', icon: QrCode },
   { id: 'attendance', label: 'Attendance', icon: CalendarCheck },
   { id: 'timetable', label: 'Timetable', icon: Calendar },
   { id: 'academic', label: 'Academic', icon: BookOpen },
@@ -30,9 +32,36 @@ export default function TeacherProfilePage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<any>({});
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
   const [showQR, setShowQR] = useState(false);
+  const [idTemplate, setIdTemplate] = useState<any>(null);
+  const [idCardHtml, setIdCardHtml] = useState<string>('');
+  const [schoolLogo, setSchoolLogo] = useState<string>('');
   const [attData, setAttData] = useState<any>(null);
   const [attMonth, setAttMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+
+  // Load default Staff ID template + school logo
+  useEffect(() => {
+    api.get('/print-templates', { params: { type: 'TEACHER_ID' } })
+      .then(r => {
+        const list = r.data || [];
+        const def = list.find((t: any) => t.isDefault) || list[0] || null;
+        setIdTemplate(def);
+      })
+      .catch(() => setIdTemplate(null));
+    api.get('/settings/general').then(r => setSchoolLogo(r.data?.schoolLogo || '')).catch(() => {});
+  }, []);
+
+  // Build preview HTML when modal opens or ID Card tab is active
+  useEffect(() => {
+    if (!teacher) return;
+    if (!showQR && activeTab !== 'idcard') return;
+    (async () => {
+      const { buildIdCardSheetHtml } = await import('@/lib/idCardHtml');
+      const html = await buildIdCardSheetHtml([teacher], idTemplate, false, schoolLogo);
+      setIdCardHtml(html);
+    })();
+  }, [showQR, activeTab, teacher, idTemplate, schoolLogo]);
 
   useEffect(() => {
     api.get(`/teachers/${id}`).then(r => {
@@ -82,18 +111,24 @@ export default function TeacherProfilePage() {
     setSaving(false);
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setPendingPhoto(file);
+    e.target.value = '';
+  };
+
+  const handleCroppedPhoto = async (cropped: File) => {
+    setPendingPhoto(null);
     setUploadingPhoto(true);
     try {
+      const compressed = await compressImage(cropped, { targetKB: 40, maxDim: 500 });
       const fd = new FormData();
-      fd.append('photo', file);
+      fd.append('photo', compressed);
       const { data } = await api.post(`/teachers/${id}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setTeacher((prev: any) => ({ ...prev, photo: data.photo }));
     } catch { alert('Upload failed'); }
     setUploadingPhoto(false);
-    e.target.value = '';
   };
 
   const printProfile = () => {
@@ -225,6 +260,53 @@ ${form.bankAccount ? `<h3>Bank Details</h3><div class="info-grid">
               </div>
             </div>
 
+            {/* Teaching-load summary */}
+            {(() => {
+              const slots = teacher?.timetableSlots || [];
+              const sectionKeySet = new Set<string>();
+              const subjectSet = new Set<string>();
+              for (const s of slots) {
+                if (s.section) sectionKeySet.add(`${s.section.class?.name || '?'}-${s.section.name}`);
+                if (s.subject) subjectSet.add(s.subject.name);
+              }
+              const classTeacherOf = (teacher?.classSections || []).map((s: any) => `${s.class.name} · ${s.name}`);
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs text-slate-500 uppercase">Periods / Week</p>
+                    <p className="text-2xl font-bold text-blue-700 mt-1">{slots.length}</p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs text-slate-500 uppercase">Sections Covered</p>
+                    <p className="text-2xl font-bold text-emerald-700 mt-1">{sectionKeySet.size}</p>
+                    {sectionKeySet.size > 0 && (
+                      <p className="text-[10px] text-slate-500 mt-1 truncate" title={Array.from(sectionKeySet).join(', ')}>
+                        {Array.from(sectionKeySet).slice(0, 4).join(', ')}{sectionKeySet.size > 4 ? '…' : ''}
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs text-slate-500 uppercase">Subjects Taught</p>
+                    <p className="text-2xl font-bold text-purple-700 mt-1">{subjectSet.size}</p>
+                    {subjectSet.size > 0 && (
+                      <p className="text-[10px] text-slate-500 mt-1 truncate" title={Array.from(subjectSet).join(', ')}>
+                        {Array.from(subjectSet).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs text-slate-500 uppercase">Class Teacher Of</p>
+                    <p className="text-2xl font-bold text-amber-700 mt-1">{classTeacherOf.length}</p>
+                    {classTeacherOf.length > 0 && (
+                      <p className="text-[10px] text-slate-500 mt-1 truncate" title={classTeacherOf.join(', ')}>
+                        {classTeacherOf.join(', ')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               <div className="bg-white rounded-xl border border-slate-200 p-5">
                 <div className="flex items-center gap-2 mb-4"><div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center"><User className="h-4 w-4 text-blue-600" /></div><h3 className="text-sm font-semibold text-slate-900">Basic Details</h3></div>
@@ -305,6 +387,57 @@ ${form.bankAccount ? `<h3>Bank Details</h3><div class="info-grid">
                 ) : <p className="p-5 text-sm text-slate-400">No students</p>}
               </div>
             )) : <p className="text-slate-400 text-center py-8">Not assigned as class teacher to any section</p>}
+          </div>
+        )}
+
+        {/* ID CARD TAB — visible card + Print, uses the active Staff ID template */}
+        {activeTab === 'idcard' && (
+          <div className="space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl p-5">
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Staff ID Card</h2>
+                  <p className="text-xs text-slate-500">
+                    {idTemplate ? <>Using template: <strong className="text-slate-700">{idTemplate.name}</strong></> : 'No template configured — using defaults'}
+                    {' · '}
+                    <a href="/settings" className="text-blue-600 hover:underline">Change in Settings → Print Templates</a>
+                  </p>
+                </div>
+                <button onClick={async () => {
+                  if (!teacher) return;
+                  const { printIdCards } = await import('@/lib/idCardHtml');
+                  await printIdCards([teacher], idTemplate, false, schoolLogo);
+                }}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 text-sm font-medium">
+                  <Printer className="h-4 w-4" /> Print ID Card
+                </button>
+              </div>
+
+              <div className="bg-slate-50 rounded-lg p-6 flex justify-center">
+                {idCardHtml ? (
+                  <iframe
+                    title="staff-id-card"
+                    srcDoc={idCardHtml}
+                    style={{
+                      width: idTemplate?.config?.orientation === 'landscape' ? 360 : 240,
+                      height: idTemplate?.config?.orientation === 'landscape' ? 240 : 380,
+                      border: 'none',
+                      background: 'white',
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                      borderRadius: 8,
+                    }}
+                  />
+                ) : (
+                  <p className="text-sm text-slate-400 py-12">Generating ID card preview…</p>
+                )}
+              </div>
+
+              {!teacher?.photo && (
+                <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                  <strong>No photo uploaded.</strong> The card will show initials. Upload a photo on the Personal tab.
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -442,51 +575,55 @@ ${form.bankAccount ? `<h3>Bank Details</h3><div class="info-grid">
         )}
       </div>
 
-      {/* QR ID Card Modal */}
+      {/* Photo cropper — appears when a file is picked, before upload */}
+      {pendingPhoto && (
+        <PhotoCropper
+          file={pendingPhoto}
+          aspect={3 / 4}
+          outputW={600}
+          onCancel={() => setPendingPhoto(null)}
+          onConfirm={handleCroppedPhoto}
+        />
+      )}
+
+      {/* Staff ID Card Modal — uses the active Staff ID template from Settings */}
       {showQR && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowQR(false)}>
           <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div id="teacher-id-card" className="p-6">
-              <div className="border-2 border-emerald-800 rounded-xl overflow-hidden">
-                <div className="text-center py-3 text-white" style={{ background: '#006400' }}>
-                  <p className="text-sm font-bold tracking-wider">PATHAK EDUCATIONAL FOUNDATION SCHOOL</p>
-                  <p className="text-[10px] opacity-80">Staff Identity Card</p>
-                </div>
-                <div className="p-4 flex gap-4">
-                  <div className="flex-1">
-                    {teacher?.photo ? (
-                      <img src={teacher.photo} alt="" className="w-24 h-28 object-cover rounded-lg border border-slate-200" />
-                    ) : (
-                      <div className="w-24 h-28 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-2xl font-bold">
-                        {form.firstName?.[0]}{form.lastName?.[0]}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 text-xs space-y-1.5">
-                    <div><span className="text-slate-400">Name</span><p className="font-bold text-slate-900">{form.firstName} {form.lastName}</p></div>
-                    <div><span className="text-slate-400">Designation</span><p className="font-bold text-slate-900">{form.designation || 'Teacher'}</p></div>
-                    <div><span className="text-slate-400">Employee ID</span><p className="font-bold text-blue-700">{teacher?.employeeId}</p></div>
-                    <div><span className="text-slate-400">Subjects</span><p className="font-bold text-slate-900">{teacher?.subjects?.map((s: any) => s.name).join(', ') || '—'}</p></div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-center pb-4">
-                  <div className="bg-white p-2 rounded-lg border border-slate-200">
-                    <QRCode value={`TCH:${id}`} size={100} />
-                  </div>
-                </div>
-                <div className="text-center py-2 bg-slate-100 text-[10px] text-slate-500">Scan for attendance</div>
+            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Staff ID Card Preview</p>
+                <p className="text-[11px] text-slate-500">
+                  {idTemplate ? <>Template: <strong>{idTemplate.name}</strong></> : 'No template configured — using defaults'}
+                </p>
               </div>
+              <button onClick={() => setShowQR(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">✕</button>
             </div>
-            <div className="flex gap-2 px-6 pb-6">
-              <button onClick={() => {
-                const el = document.getElementById('teacher-id-card');
-                if (!el) return;
-                const w = window.open('', '_blank');
-                if (w) { w.document.write(`<html><head><title>ID - ${form.firstName} ${form.lastName}</title><style>body{margin:20px;font-family:Arial}@media print{body{margin:10px}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.print(); }
+
+            <div className="p-5 bg-slate-50 flex justify-center overflow-auto max-h-[60vh]">
+              {idCardHtml ? (
+                <iframe
+                  title="staff-id-card-preview"
+                  srcDoc={idCardHtml}
+                  style={{ width: 240, height: 380, border: 'none', background: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                />
+              ) : (
+                <p className="text-sm text-slate-400 py-8">Generating preview…</p>
+              )}
+            </div>
+
+            <div className="flex gap-2 px-5 pb-5">
+              <button onClick={async () => {
+                if (!teacher) return;
+                const { printIdCards } = await import('@/lib/idCardHtml');
+                await printIdCards([teacher], idTemplate, false, schoolLogo);
               }} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 text-sm font-medium">
                 <Printer className="h-4 w-4" /> Print ID Card
               </button>
               <button onClick={() => setShowQR(false)} className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 text-sm">Close</button>
+            </div>
+            <div className="px-5 pb-3 text-[11px] text-slate-400 text-center">
+              Change the design at <strong>Settings → Print Templates</strong>
             </div>
           </div>
         </div>

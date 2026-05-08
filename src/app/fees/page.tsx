@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { Plus, CreditCard, Receipt, Search, Users, IndianRupee, Printer, X, BookOpen, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import { Plus, CreditCard, Receipt, Search, Users, IndianRupee, Printer, X, BookOpen, ChevronDown, ChevronUp, AlertTriangle, CalendarPlus } from 'lucide-react';
 
 const FEE_TYPES = ['TUITION', 'TRANSPORT', 'ANNUAL', 'LAB', 'SPORTS', 'LIBRARY', 'MISC', 'FINE'];
 const PAYMENT_METHODS = ['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'];
@@ -20,6 +20,15 @@ export default function FeesPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'collect' | 'structures' | 'payments'>('collect');
   const [showForm, setShowForm] = useState(false);
+
+  // Monthly fee generation
+  const [showMonthlyGen, setShowMonthlyGen] = useState(false);
+  const [monthlyGenForm, setMonthlyGenForm] = useState({
+    month: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })(),
+    classId: '',
+  });
+  const [monthlyGenSubmitting, setMonthlyGenSubmitting] = useState(false);
+  const [monthlyGenResult, setMonthlyGenResult] = useState<any>(null);
 
   // Fee structure form
   const [form, setForm] = useState({
@@ -442,9 +451,14 @@ export default function FeesPage() {
           <FadeIn>
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-bold text-slate-900">Fee Management</h1>
-              <Button onClick={() => setShowForm(!showForm)} variant="outline">
-                <Plus className="h-4 w-4" /> Add Fee Structure
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={() => { setMonthlyGenResult(null); setShowMonthlyGen(true); }} variant="outline">
+                  <CalendarPlus className="h-4 w-4" /> Generate Monthly Fees
+                </Button>
+                <Button onClick={() => setShowForm(!showForm)} variant="outline">
+                  <Plus className="h-4 w-4" /> Add Fee Structure
+                </Button>
+              </div>
             </div>
           </FadeIn>
 
@@ -1141,6 +1155,73 @@ export default function FeesPage() {
           )}
         </div>
       </PageTransition>
+
+      {/* Monthly fee generation modal */}
+      {showMonthlyGen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowMonthlyGen(false)}>
+          <div onClick={e => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900">Generate Monthly Fees</h3>
+              <button onClick={() => setShowMonthlyGen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Adds a <code>MONTHLY_FEE</code> charge for the selected month to every active student in their class&apos;s amount (from the Annual Fee Plan). Students who already have one for that month are skipped.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-600">
+                Month
+                <input type="month" value={monthlyGenForm.month}
+                  onChange={e => setMonthlyGenForm({ ...monthlyGenForm, month: e.target.value })}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+              </label>
+              <label className="text-xs text-slate-600">
+                Class (optional)
+                <select value={monthlyGenForm.classId}
+                  onChange={e => setMonthlyGenForm({ ...monthlyGenForm, classId: e.target.value })}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                  <option value="">All classes</option>
+                  {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </label>
+            </div>
+
+            {monthlyGenResult && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm space-y-1">
+                <p className="font-semibold text-green-800">{monthlyGenResult.monthLabel} — done</p>
+                <p className="text-green-700"><strong>{monthlyGenResult.studentsCharged}</strong> students charged · <strong>{monthlyGenResult.studentsSkipped}</strong> skipped (already had one or no class fee set)</p>
+                <p className="text-green-700">Total billed: <strong>{formatCurrency(monthlyGenResult.totalAmount)}</strong></p>
+                {monthlyGenResult.skippedNoFee?.length > 0 && (
+                  <p className="text-amber-700 text-xs">Skipped (no class fee): {monthlyGenResult.skippedNoFee.join(', ')}</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowMonthlyGen(false)}
+                className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Close</button>
+              <button onClick={async () => {
+                setMonthlyGenSubmitting(true);
+                setMonthlyGenResult(null);
+                try {
+                  const { data } = await api.post('/fees/ledger/generate-monthly', {
+                    month: monthlyGenForm.month,
+                    classId: monthlyGenForm.classId || undefined,
+                  });
+                  setMonthlyGenResult(data);
+                } catch (err: any) {
+                  alert(err.response?.data?.error || 'Failed to generate monthly fees');
+                } finally {
+                  setMonthlyGenSubmitting(false);
+                }
+              }}
+                disabled={monthlyGenSubmitting || !monthlyGenForm.month}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+                {monthlyGenSubmitting ? 'Generating...' : 'Generate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
