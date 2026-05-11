@@ -5,7 +5,7 @@ export async function GET() {
   const classes = await prisma.class.findMany({
     include: {
       sections: { include: { classTeacher: { include: { user: { select: { firstName: true, lastName: true } } } } } },
-      _count: { select: { students: true } },
+      _count: { select: { students: { where: { user: { isActive: true } } } } },
     },
     orderBy: { numericGrade: 'asc' },
   });

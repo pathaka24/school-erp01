@@ -91,8 +91,11 @@ export async function DELETE(
   if (auth instanceof Response) return auth;
 
   const { id } = await params;
-  // Refuse if section has students — admin must move them first
-  const studentCount = await prisma.student.count({ where: { sectionId: id } });
+  // Refuse if section has active students — admin must move them first.
+  // Soft-deleted students (user.isActive=false) don't block deletion.
+  const studentCount = await prisma.student.count({
+    where: { sectionId: id, user: { isActive: true } },
+  });
   if (studentCount > 0) {
     return Response.json(
       { error: `Cannot delete: ${studentCount} student(s) still in this section. Move them first.` },

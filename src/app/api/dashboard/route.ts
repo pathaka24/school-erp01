@@ -16,9 +16,10 @@ export async function GET() {
 
   try {
     // ── Quick Stats (counts) ───────────────────────────────
+    // Student/teacher DELETE is a soft delete (user.isActive=false), so filter here too.
     const [totalStudents, totalTeachers, totalClasses] = await Promise.all([
-      prisma.student.count(),
-      prisma.teacher.count(),
+      prisma.student.count({ where: { user: { isActive: true } } }),
+      prisma.teacher.count({ where: { user: { isActive: true } } }),
       prisma.class.count(),
     ]);
 
@@ -48,7 +49,7 @@ export async function GET() {
     const allSections = await prisma.section.findMany({
       include: {
         class: { select: { name: true } },
-        _count: { select: { students: true } },
+        _count: { select: { students: { where: { user: { isActive: true } } } } },
       },
     });
 
