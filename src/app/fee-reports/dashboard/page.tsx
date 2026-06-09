@@ -5,7 +5,7 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { TrendingUp, IndianRupee, Users, AlertTriangle, Phone } from 'lucide-react';
+import { TrendingUp, IndianRupee, Users, AlertTriangle, Phone, Archive, RotateCcw, Search } from 'lucide-react';
 import Link from 'next/link';
 
 export default function CollectionDashboardPage() {
@@ -15,6 +15,56 @@ export default function CollectionDashboardPage() {
   });
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Archive / restore a student's fee ledger
+  const [archiveSearch, setArchiveSearch] = useState('');
+  const [archiveResults, setArchiveResults] = useState<any[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState<string | null>(null);
+  const [archiveMsg, setArchiveMsg] = useState('');
+
+  const runStudentSearch = async () => {
+    if (!archiveSearch.trim()) return;
+    setArchiveLoading(true);
+    setArchiveMsg('');
+    try {
+      const r = await api.get('/students', { params: { search: archiveSearch.trim() } });
+      setArchiveResults(r.data.slice(0, 10));
+      if (r.data.length === 0) setArchiveMsg('No active students matched.');
+    } catch {
+      setArchiveMsg('Search failed.');
+    } finally {
+      setArchiveLoading(false);
+    }
+  };
+
+  const doArchive = async (s: any) => {
+    const name = `${s.user.firstName} ${s.user.lastName}`.trim();
+    if (!confirm(`Archive ALL fee records for ${name}?\n\nThey will be hidden from reports but stay recoverable.`)) return;
+    setArchiveBusy(s.id);
+    try {
+      const r = await api.post(`/fees/ledger/${s.id}/archive`);
+      setArchiveMsg(`Archived ${r.data.archived} entr${r.data.archived === 1 ? 'y' : 'ies'} for ${name}.`);
+    } catch (e: any) {
+      setArchiveMsg(e.response?.data?.error || 'Archive failed.');
+    } finally {
+      setArchiveBusy(null);
+    }
+  };
+
+  const doRestore = async (s: any) => {
+    const name = `${s.user.firstName} ${s.user.lastName}`.trim();
+    if (!confirm(`Restore archived fee records for ${name}?`)) return;
+    setArchiveBusy(s.id);
+    try {
+      const r = await api.delete(`/fees/ledger/${s.id}/archive`);
+      setArchiveMsg(`Restored ${r.data.restored} entr${r.data.restored === 1 ? 'y' : 'ies'} for ${name}.`);
+    } catch (e: any) {
+      setArchiveMsg(e.response?.data?.error || 'Restore failed.');
+    } finally {
+      setArchiveBusy(null);
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -105,6 +155,60 @@ export default function CollectionDashboardPage() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Archive a student's fee records */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-1">
+                  <Archive className="h-4 w-4 text-slate-600" />
+                  <h3 className="text-sm font-semibold text-slate-700">Archive Student Fee Records</h3>
+                </div>
+                <p className="text-xs text-slate-500 mb-3">
+                  Hide a student&apos;s entire fee ledger from reports (e.g. a student who has left). Archived records are recoverable — restore them anytime.
+                </p>
+                <div className="flex gap-2">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                    <input
+                      value={archiveSearch}
+                      onChange={e => setArchiveSearch(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') runStudentSearch(); }}
+                      placeholder="Search student by name…"
+                      className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                    />
+                  </div>
+                  <button onClick={runStudentSearch} disabled={archiveLoading}
+                    className="px-4 py-2 bg-slate-800 text-white text-sm rounded-lg hover:bg-slate-700 disabled:opacity-50">
+                    {archiveLoading ? 'Searching…' : 'Search'}
+                  </button>
+                </div>
+
+                {archiveMsg && <p className="text-xs mt-2 text-slate-600">{archiveMsg}</p>}
+
+                {archiveResults.length > 0 && (
+                  <div className="mt-3 border border-slate-200 rounded-lg divide-y divide-slate-100">
+                    {archiveResults.map((s: any) => (
+                      <div key={s.id} className="flex items-center justify-between px-3 py-2 flex-wrap gap-2">
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{s.user.firstName} {s.user.lastName}</p>
+                          <p className="text-xs text-slate-500">
+                            {s.admissionNo}{s.class?.name ? ` · ${s.class.name}` : ''}{s.section?.name ? ` · ${s.section.name}` : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => doArchive(s)} disabled={archiveBusy === s.id}
+                            className="px-3 py-1 bg-amber-100 text-amber-700 text-xs rounded hover:bg-amber-200 disabled:opacity-50 flex items-center gap-1">
+                            <Archive className="h-3 w-3" /> Archive fees
+                          </button>
+                          <button onClick={() => doRestore(s)} disabled={archiveBusy === s.id}
+                            className="px-3 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200 disabled:opacity-50 flex items-center gap-1">
+                            <RotateCcw className="h-3 w-3" /> Restore
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Collection rate bar */}

@@ -42,7 +42,9 @@ export async function GET(request: NextRequest) {
     return Response.json({ ok: true, month, studentsCharged: 0, note: 'No classes have a monthly fee set' });
   }
 
+  // Never auto-charge soft-deleted (deactivated) students
   const students = await prisma.student.findMany({
+    where: { user: { isActive: true } },
     select: { id: true, classId: true },
   });
 

@@ -11,6 +11,8 @@ interface Teacher {
   employeeId: string;
   qualification?: string;
   experience?: number;
+  photo?: string | null;
+  designation?: string | null;
   user: { firstName: string; lastName: string; email: string; phone?: string };
   subjects: { id: string; name: string; code: string }[];
 }
@@ -87,12 +89,12 @@ export default function TeachersPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Teachers</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Teachers</h1>
             <p className="text-slate-500">{teachers.length} total teachers</p>
           </div>
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+          <button onClick={() => setShowForm(!showForm)} className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shrink-0">
             <Plus className="h-4 w-4" /> Add Teacher
           </button>
         </div>
@@ -163,8 +165,8 @@ export default function TeachersPage() {
             className="w-full max-w-md px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
         </div>
 
-        {/* Teacher Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        {/* Desktop / tablet: table with avatar */}
+        <div className="hidden md:block bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -185,8 +187,22 @@ export default function TeachersPage() {
                 <tr key={teacher.id} className="hover:bg-slate-50">
                   <td className="px-5 py-3 text-sm font-mono text-slate-600">{teacher.employeeId}</td>
                   <td className="px-5 py-3 text-sm font-medium">
-                    <Link href={`/teachers/${teacher.id}`} className="text-blue-600 hover:text-blue-800 hover:underline">
-                      {teacher.user.firstName} {teacher.user.lastName}
+                    <Link href={`/teachers/${teacher.id}`} className="flex items-center gap-3 group">
+                      {teacher.photo ? (
+                        <img src={teacher.photo} alt="" className="w-9 h-9 rounded-full object-cover border border-slate-200" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white text-xs font-bold">
+                          {teacher.user.firstName[0]}{teacher.user.lastName[0] || ''}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-blue-600 group-hover:text-blue-800 group-hover:underline truncate">
+                          {teacher.user.firstName} {teacher.user.lastName}
+                        </p>
+                        {teacher.designation && (
+                          <p className="text-xs text-slate-400 font-normal">{teacher.designation}</p>
+                        )}
+                      </div>
                     </Link>
                   </td>
                   <td className="px-5 py-3 text-sm text-slate-500">{teacher.user.phone || '—'}</td>
@@ -207,6 +223,45 @@ export default function TeachersPage() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile: card list with avatar */}
+        <div className="md:hidden space-y-2">
+          {loading ? (
+            <div className="bg-white rounded-xl p-8 text-center text-slate-400 border border-slate-200">Loading…</div>
+          ) : filteredTeachers.length === 0 ? (
+            <div className="bg-white rounded-xl p-8 text-center text-slate-400 border border-slate-200">No teachers found</div>
+          ) : filteredTeachers.map((teacher) => (
+            <div key={teacher.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3">
+              <Link href={`/teachers/${teacher.id}`} className="flex items-center gap-3 min-w-0 flex-1">
+                {teacher.photo ? (
+                  <img src={teacher.photo} alt="" className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0" />
+                ) : (
+                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white text-sm font-bold shrink-0">
+                    {teacher.user.firstName[0]}{teacher.user.lastName[0] || ''}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-slate-900 truncate">
+                    {teacher.user.firstName} {teacher.user.lastName}
+                  </p>
+                  <p className="text-xs font-mono text-slate-500 truncate">{teacher.employeeId}</p>
+                  <p className="text-xs text-slate-400 truncate">
+                    {teacher.subjects.map(s => s.name).join(', ') || teacher.user.phone || teacher.user.email}
+                  </p>
+                </div>
+              </Link>
+              <div className="flex gap-1 shrink-0">
+                <button onClick={() => { setResetModal(teacher); setNewPassword(''); setResetDone(false); }}
+                  className="p-2 text-amber-500 hover:bg-amber-50 rounded-lg" title="Reset Password">
+                  <KeyRound className="h-4 w-4" />
+                </button>
+                <button onClick={() => handleDelete(teacher.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg" title="Delete">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

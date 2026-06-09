@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { requireScope } from '@/lib/apiAuth';
+import { archiveStudentLedger } from '@/lib/feeLedger';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -46,14 +47,25 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     'height', 'weight', 'vision', 'hearing', 'allergies', 'medicalConditions', 'disability',
     'emergencyContactName', 'emergencyContactPhone',
   ];
+  const numericFields = ['annualIncome', 'height', 'weight'];
+  const dateFields = ['dateOfBirth', 'admissionDate'];
+
   const studentData: any = {};
   for (const key of allowedStudentFields) {
-    if (body[key] !== undefined) studentData[key] = body[key];
+    if (body[key] === undefined) continue;
+    const value = body[key];
+    // The edit form sends '' for empty optional fields. Prisma rejects '' on
+    // typed columns (DateTime/Float/enum), so coerce blanks to null instead.
+    if (value === '' || value === null) {
+      studentData[key] = null;
+    } else if (numericFields.includes(key)) {
+      studentData[key] = Number(value);
+    } else if (dateFields.includes(key)) {
+      studentData[key] = new Date(value);
+    } else {
+      studentData[key] = value;
+    }
   }
-
-  // Convert date strings to Date objects
-  if (studentData.dateOfBirth) studentData.dateOfBirth = new Date(studentData.dateOfBirth);
-  if (studentData.admissionDate) studentData.admissionDate = new Date(studentData.admissionDate);
 
   try {
   const student = await prisma.student.update({
@@ -71,6 +83,11 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   return Response.json(student);
   } catch (error: any) {
     if (error.code === 'P2025') return Response.json({ error: 'Student not found' }, { status: 404 });
+    if (error.code === 'P2002') {
+      const field = Array.isArray(error.meta?.target) ? error.meta.target.join(', ') : 'a field';
+      return Response.json({ error: `Duplicate value for ${field}` }, { status: 409 });
+    }
+    console.error('PUT /api/students/[id] failed:', error);
     return Response.json({ error: 'Failed to update student' }, { status: 500 });
   }
 }
@@ -80,12 +97,23 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   if (auth instanceof Response) return auth;
 
   const { id } = await params;
+  // ?archiveFees=true → also soft-archive (void) the student's fee ledger.
+  // Records stay recoverable; default keeps them untouched.
+  const archiveFees = request.nextUrl.searchParams.get('archiveFees') === 'true';
+
   const student = await prisma.student.findUnique({ where: { id } });
   if (!student) return Response.json({ error: 'Student not found' }, { status: 404 });
+
+  let feesArchived = 0;
+  if (archiveFees) {
+    const result = await archiveStudentLedger(student.id, { actor: auth.userId, reason: 'Student deleted' });
+    feesArchived = result.archived;
+  }
+
   // Soft delete: deactivate the user instead of hard-deleting (preserves audit trail)
   await prisma.user.update({
     where: { id: student.userId },
     data: { isActive: false, deletedAt: new Date(), deletedBy: auth.userId } as any,
   });
-  return Response.json({ message: 'Student deactivated' });
+  return Response.json({ message: 'Student deactivated', feesArchived });
 }

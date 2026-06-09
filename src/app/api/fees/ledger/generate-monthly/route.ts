@@ -40,8 +40,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'No classes have a monthly fee set in the fee plan' }, { status: 400 });
   }
 
-  // Pick which students to charge
-  const studentWhere: any = {};
+  // Pick which students to charge — never charge soft-deleted (deactivated) students
+  const studentWhere: any = { user: { isActive: true } };
   if (classId) studentWhere.classId = classId;
   if (sectionId) studentWhere.sectionId = sectionId;
 

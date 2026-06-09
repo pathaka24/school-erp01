@@ -68,9 +68,14 @@ export default function StudentsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this student?')) return;
+    if (!confirm('Delete this student? They will be deactivated (kept in DB for audit).')) return;
+    const archiveFees = confirm(
+      "Also archive this student's fee records?\n\n" +
+      'OK = archive them (hidden from reports, recoverable later)\n' +
+      'Cancel = keep the fee records as-is'
+    );
     try {
-      await api.delete(`/students/${id}`);
+      await api.delete(`/students/${id}`, { params: archiveFees ? { archiveFees: 'true' } : {} });
       if (selectedClass) loadStudents(selectedClass.id, selectedSection || undefined);
     } catch { alert('Failed to delete'); }
   };
@@ -93,9 +98,14 @@ export default function StudentsPage() {
   const handleBulkDelete = async () => {
     if (selected.size === 0) return;
     if (!confirm(`Delete ${selected.size} students? They will be deactivated (kept in DB for audit) — recoverable by an admin.`)) return;
+    const archiveFees = confirm(
+      `Also archive fee records for these ${selected.size} students?\n\n` +
+      'OK = archive them (hidden from reports, recoverable later)\n' +
+      'Cancel = keep the fee records as-is'
+    );
     setBulkDeleting(true);
     try {
-      await api.post('/students/bulk-delete', { studentIds: Array.from(selected) });
+      await api.post('/students/bulk-delete', { studentIds: Array.from(selected), archiveFees });
       setSelected(new Set());
       if (selectedClass) loadStudents(selectedClass.id, selectedSection || undefined);
     } catch (err: any) {
@@ -123,17 +133,21 @@ export default function StudentsPage() {
           {!selectedClass && (
             <>
               <FadeIn>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
-                    <h1 className="text-2xl font-bold text-slate-900">Students</h1>
+                    <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Students</h1>
                     <p className="text-sm text-slate-500">{totalStudents} total students across {classes.length} classes</p>
                   </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={() => router.push('/students/import')}>
-                      <Upload className="h-4 w-4" /> Import from Excel/CSV
+                  <div className="flex gap-2 flex-wrap">
+                    <Button variant="outline" onClick={() => router.push('/students/import')} className="flex-1 sm:flex-none">
+                      <Upload className="h-4 w-4" />
+                      <span className="hidden sm:inline">Import from Excel/CSV</span>
+                      <span className="sm:hidden">Import</span>
                     </Button>
-                    <Button onClick={() => router.push('/admission')}>
-                      <UserPlus className="h-4 w-4" /> New Admission
+                    <Button onClick={() => router.push('/admission')} className="flex-1 sm:flex-none">
+                      <UserPlus className="h-4 w-4" />
+                      <span className="hidden sm:inline">New Admission</span>
+                      <span className="sm:hidden">New</span>
                     </Button>
                   </div>
                 </div>
@@ -187,40 +201,42 @@ export default function StudentsPage() {
           {selectedClass && (
             <>
               <FadeIn>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <button onClick={goBack} className="p-2 hover:bg-slate-100 rounded-xl transition">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button onClick={goBack} className="p-2 hover:bg-slate-100 rounded-xl transition shrink-0">
                       <ArrowLeft className="h-5 w-5 text-slate-600" />
                     </button>
-                    <div>
-                      <h1 className="text-2xl font-bold text-slate-900">{selectedClass.name}</h1>
+                    <div className="min-w-0">
+                      <h1 className="text-xl sm:text-2xl font-bold text-slate-900 truncate">{selectedClass.name}</h1>
                       <p className="text-sm text-slate-500">{students.length} students</p>
                     </div>
                   </div>
-                  <Button onClick={() => router.push('/admission')}>
-                    <UserPlus className="h-4 w-4" /> New Admission
+                  <Button onClick={() => router.push('/admission')} className="shrink-0">
+                    <UserPlus className="h-4 w-4" />
+                    <span className="hidden sm:inline">New Admission</span>
+                    <span className="sm:hidden">New</span>
                   </Button>
                 </div>
               </FadeIn>
 
               {/* Section tabs + search */}
               <FadeIn delay={0.1}>
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex gap-1 bg-slate-100 rounded-xl p-1 overflow-x-auto -mx-1 px-1 scrollbar-thin">
                     <button onClick={() => selectSection('')}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!selectedSection ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                      className={`px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap ${!selectedSection ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                       All
                     </button>
                     {selectedClass.sections?.map((sec: any) => (
                       <button key={sec.id} onClick={() => selectSection(sec.id)}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition ${selectedSection === sec.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        className={`px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap ${selectedSection === sec.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                         Section {sec.name}
                       </button>
                     ))}
                   </div>
-                  <div className="relative flex-1 min-w-[200px]">
+                  <div className="relative flex-1 sm:min-w-[200px]">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                    <input placeholder="Search by name or admission no..." value={search} onChange={e => setSearch(e.target.value)}
+                    <input placeholder="Search by name or adm. no..." value={search} onChange={e => setSearch(e.target.value)}
                       className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl text-sm text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none" />
                   </div>
                 </div>
@@ -230,11 +246,11 @@ export default function StudentsPage() {
               <FadeIn delay={0.15}>
                 {/* Bulk action bar — visible when something is selected */}
                 {selected.size > 0 && (
-                  <div className="bg-blue-600 text-white rounded-xl px-4 py-2.5 mb-3 flex items-center justify-between">
+                  <div className="bg-blue-600 text-white rounded-xl px-4 py-2.5 mb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <p className="text-sm font-medium">
                       <strong>{selected.size}</strong> selected
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       <button onClick={() => setSelected(new Set())}
                         className="px-3 py-1 bg-white/10 hover:bg-white/20 rounded text-xs">
                         Clear
@@ -255,67 +271,112 @@ export default function StudentsPage() {
                 ) : filteredStudents.length === 0 ? (
                   <Card className="p-12 text-center text-slate-400">No students found</Card>
                 ) : (
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                          <th className="text-left px-3 py-3 w-8" onClick={e => e.stopPropagation()}>
-                            <input type="checkbox"
-                              checked={filteredStudents.length > 0 && selected.size === filteredStudents.length}
-                              onChange={() => toggleAll(filteredStudents)} />
-                          </th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">#</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Adm. No</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Name</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Section</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Phone</th>
-                          <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredStudents.map((student: any, idx: number) => (
-                          <tr key={student.id} className={`hover:bg-slate-50 transition cursor-pointer ${selected.has(student.id) ? 'bg-blue-50' : ''}`} onClick={() => router.push(`/students/${student.id}`)}>
-                            <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
-                              <input type="checkbox" checked={selected.has(student.id)} onChange={() => toggle(student.id)} />
-                            </td>
-                            <td className="px-5 py-3 text-sm text-slate-400">{idx + 1}</td>
-                            <td className="px-5 py-3">
-                              <span className="text-sm font-mono text-blue-600">{student.admissionNo}</span>
-                            </td>
-                            <td className="px-5 py-3">
-                              <div className="flex items-center gap-3">
-                                {student.photo ? (
-                                  <img src={student.photo} alt="" className="w-9 h-9 rounded-full object-cover border border-slate-200" />
-                                ) : (
-                                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
-                                    {student.user.firstName[0]}{student.user.lastName[0]}
-                                  </div>
-                                )}
-                                <div>
-                                  <p className="text-sm font-medium text-slate-900">{student.user.firstName} {student.user.lastName}</p>
-                                  <p className="text-xs text-slate-400">{student.user.email}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-5 py-3">
-                              <Badge variant="secondary">{student.section?.name}</Badge>
-                            </td>
-                            <td className="px-5 py-3 text-sm text-slate-500">{student.user.phone || '—'}</td>
-                            <td className="px-5 py-3 text-right">
-                              <div className="flex gap-1 justify-end" onClick={e => e.stopPropagation()}>
-                                <button onClick={() => router.push(`/students/${student.id}`)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition">
-                                  <Eye className="h-4 w-4" />
-                                </button>
-                                <button onClick={() => handleDelete(student.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition">
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </td>
+                  <>
+                    {/* Desktop / tablet: table */}
+                    <div className="hidden md:block bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                      <table className="w-full">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr>
+                            <th className="text-left px-3 py-3 w-8" onClick={e => e.stopPropagation()}>
+                              <input type="checkbox"
+                                checked={filteredStudents.length > 0 && selected.size === filteredStudents.length}
+                                onChange={() => toggleAll(filteredStudents)} />
+                            </th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">#</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Adm. No</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Name</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Section</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Phone</th>
+                            <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Actions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredStudents.map((student: any, idx: number) => (
+                            <tr key={student.id} className={`hover:bg-slate-50 transition cursor-pointer ${selected.has(student.id) ? 'bg-blue-50' : ''}`} onClick={() => router.push(`/students/${student.id}`)}>
+                              <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                                <input type="checkbox" checked={selected.has(student.id)} onChange={() => toggle(student.id)} />
+                              </td>
+                              <td className="px-5 py-3 text-sm text-slate-400">{idx + 1}</td>
+                              <td className="px-5 py-3">
+                                <span className="text-sm font-mono text-blue-600">{student.admissionNo}</span>
+                              </td>
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-3">
+                                  {student.photo ? (
+                                    <img src={student.photo} alt="" className="w-9 h-9 rounded-full object-cover border border-slate-200" />
+                                  ) : (
+                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
+                                      {student.user.firstName[0]}{student.user.lastName[0]}
+                                    </div>
+                                  )}
+                                  <div>
+                                    <p className="text-sm font-medium text-slate-900">{student.user.firstName} {student.user.lastName}</p>
+                                    <p className="text-xs text-slate-400">{student.user.email}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-5 py-3">
+                                <Badge variant="secondary">{student.section?.name}</Badge>
+                              </td>
+                              <td className="px-5 py-3 text-sm text-slate-500">{student.user.phone || '—'}</td>
+                              <td className="px-5 py-3 text-right">
+                                <div className="flex gap-1 justify-end" onClick={e => e.stopPropagation()}>
+                                  <button onClick={() => router.push(`/students/${student.id}`)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition">
+                                    <Eye className="h-4 w-4" />
+                                  </button>
+                                  <button onClick={() => handleDelete(student.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition">
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile: card list */}
+                    <div className="md:hidden space-y-2">
+                      <label className="flex items-center gap-2 px-1 text-xs text-slate-500">
+                        <input type="checkbox"
+                          checked={filteredStudents.length > 0 && selected.size === filteredStudents.length}
+                          onChange={() => toggleAll(filteredStudents)} />
+                        Select all ({filteredStudents.length})
+                      </label>
+                      {filteredStudents.map((student: any) => (
+                        <div key={student.id}
+                          onClick={() => router.push(`/students/${student.id}`)}
+                          className={`bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 ${selected.has(student.id) ? 'ring-2 ring-blue-400 bg-blue-50' : ''}`}>
+                          <input type="checkbox"
+                            checked={selected.has(student.id)}
+                            onChange={() => toggle(student.id)}
+                            onClick={e => e.stopPropagation()}
+                            className="shrink-0" />
+                          {student.photo ? (
+                            <img src={student.photo} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0" />
+                          ) : (
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
+                              {student.user.firstName[0]}{student.user.lastName[0]}
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-medium text-slate-900 truncate">
+                                {student.user.firstName} {student.user.lastName}
+                              </p>
+                              <Badge variant="secondary" className="shrink-0">{student.section?.name}</Badge>
+                            </div>
+                            <p className="text-xs font-mono text-blue-600 truncate">{student.admissionNo}</p>
+                            <p className="text-xs text-slate-400 truncate">{student.user.phone || student.user.email || '—'}</p>
+                          </div>
+                          <button onClick={e => { e.stopPropagation(); handleDelete(student.id); }}
+                            className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition shrink-0">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </FadeIn>
             </>
