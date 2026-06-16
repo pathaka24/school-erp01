@@ -1,7 +1,14 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
-import { recomputeStudentLedger, writeFeeLedgerAudit } from '@/lib/feeLedger';
+import { recomputeStudentLedger, writeFeeLedgerAudit, getFeeLockMonth, isMonthLocked } from '@/lib/feeLedger';
 import { requireScope } from '@/lib/apiAuth';
+
+function lockedResponse(lockMonth: string) {
+  return Response.json(
+    { error: `Ledger is locked through ${lockMonth} — entries in locked months are read-only. Move the lock in Settings → Annual Fee Plan first.` },
+    { status: 423 }
+  );
+}
 
 // PATCH /api/fees/ledger/entry/[id] — edit a ledger entry. Writes an UPDATE
 // audit row capturing before/after, then recomputes balances + paidAmount.
@@ -19,6 +26,13 @@ export async function PATCH(
   if (!existing) return Response.json({ error: 'Entry not found' }, { status: 404 });
   if (existing.voidedAt) return Response.json({ error: 'Cannot edit a voided entry — restore it first' }, { status: 400 });
 
+  if (!body.reason || !String(body.reason).trim()) {
+    return Response.json({ error: 'A reason is required when editing a ledger entry' }, { status: 400 });
+  }
+
+  const lockMonth = await getFeeLockMonth();
+  if (isMonthLocked(existing.month, lockMonth)) return lockedResponse(lockMonth!);
+
   const allowed: Record<string, any> = {};
   if (body.amount !== undefined) {
     const n = parseFloat(body.amount);
@@ -34,8 +48,8 @@ export async function PATCH(
     if (!isNaN(newDate.getTime())) allowed.date = newDate;
   }
   if (body.type !== undefined) {
-    if (body.type !== 'CHARGE' && body.type !== 'DEPOSIT') {
-      return Response.json({ error: 'type must be CHARGE or DEPOSIT' }, { status: 400 });
+    if (!['CHARGE', 'DEPOSIT', 'DISCOUNT'].includes(body.type)) {
+      return Response.json({ error: 'type must be CHARGE, DEPOSIT or DISCOUNT' }, { status: 400 });
     }
     allowed.type = body.type;
   }
@@ -46,17 +60,23 @@ export async function PATCH(
   if (Object.keys(allowed).length === 0) {
     return Response.json({ error: 'No editable fields provided' }, { status: 400 });
   }
+  // Also block moving an entry INTO a locked month
+  if (allowed.month && isMonthLocked(allowed.month, lockMonth)) return lockedResponse(lockMonth!);
 
   try {
-    const updated = await prisma.feeLedger.update({ where: { id }, data: allowed });
-    await writeFeeLedgerAudit({
-      entryId: id,
-      studentId: existing.studentId,
-      action: 'UPDATE',
-      before: snapshot(existing),
-      after: snapshot(updated),
-      userName: body._actor || undefined,
-      reason: body.reason || undefined,
+    // Change + audit row commit together — never one without the other
+    await prisma.$transaction(async tx => {
+      const updated = await tx.feeLedger.update({ where: { id }, data: allowed });
+      await writeFeeLedgerAudit({
+        entryId: id,
+        studentId: existing.studentId,
+        action: 'UPDATE',
+        before: snapshot(existing),
+        after: snapshot(updated),
+        userId: auth.userId,
+        userName: body._actor || undefined,
+        reason: body.reason || undefined,
+      }, tx);
     });
     const { balance } = await recomputeStudentLedger(existing.studentId);
     const fresh = await prisma.feeLedger.findUnique({ where: { id } });
@@ -85,33 +105,47 @@ export async function DELETE(
   const actor = sp.get('actor') || `${auth.userId}`;
   const hard = sp.get('hard') === 'true';
 
+  if (hard && auth.role !== 'ADMIN') {
+    return Response.json({ error: 'Hard delete requires admin — use void instead' }, { status: 403 });
+  }
+  if (!reason || !reason.trim()) {
+    return Response.json({ error: 'A reason is required when voiding or deleting a ledger entry' }, { status: 400 });
+  }
+
   const existing = await prisma.feeLedger.findUnique({ where: { id } });
   if (!existing) return Response.json({ error: 'Entry not found' }, { status: 404 });
+
+  const lockMonth = await getFeeLockMonth();
+  if (isMonthLocked(existing.month, lockMonth)) return lockedResponse(lockMonth!);
 
   try {
     if (hard) {
       // Hard delete is allowed but should be rare. Audit row stays as orphan
       // pointer (entryId still readable for forensics).
-      await writeFeeLedgerAudit({
-        entryId: id, studentId: existing.studentId, action: 'VOID',
-        before: snapshot(existing), userName: actor, reason: reason || 'HARD_DELETE',
+      await prisma.$transaction(async tx => {
+        await writeFeeLedgerAudit({
+          entryId: id, studentId: existing.studentId, action: 'VOID',
+          before: snapshot(existing), userId: auth.userId, userName: actor, reason: `HARD_DELETE: ${reason}`,
+        }, tx);
+        await tx.feeLedger.delete({ where: { id } });
       });
-      await prisma.feeLedger.delete({ where: { id } });
     } else if (existing.voidedAt) {
       return Response.json({ error: 'Already voided' }, { status: 400 });
     } else {
-      const voided = await prisma.feeLedger.update({
-        where: { id },
-        data: {
-          voidedAt: new Date(),
-          voidedBy: actor || null,
-          voidReason: reason || null,
-        },
-      });
-      await writeFeeLedgerAudit({
-        entryId: id, studentId: existing.studentId, action: 'VOID',
-        before: snapshot(existing), after: snapshot(voided),
-        userName: actor, reason,
+      await prisma.$transaction(async tx => {
+        const voided = await tx.feeLedger.update({
+          where: { id },
+          data: {
+            voidedAt: new Date(),
+            voidedBy: actor || null,
+            voidReason: reason || null,
+          },
+        });
+        await writeFeeLedgerAudit({
+          entryId: id, studentId: existing.studentId, action: 'VOID',
+          before: snapshot(existing), after: snapshot(voided),
+          userId: auth.userId, userName: actor, reason,
+        }, tx);
       });
     }
     const { balance } = await recomputeStudentLedger(existing.studentId);
@@ -136,14 +170,20 @@ export async function POST(
   if (!existing) return Response.json({ error: 'Entry not found' }, { status: 404 });
   if (!existing.voidedAt) return Response.json({ error: 'Entry is not voided' }, { status: 400 });
 
-  const restored = await prisma.feeLedger.update({
-    where: { id },
-    data: { voidedAt: null, voidedBy: null, voidReason: null },
-  });
-  await writeFeeLedgerAudit({
-    entryId: id, studentId: existing.studentId, action: 'RESTORE',
-    before: snapshot(existing), after: snapshot(restored),
-    userName: body.actor, reason: body.reason,
+  const lockMonth = await getFeeLockMonth();
+  if (isMonthLocked(existing.month, lockMonth)) return lockedResponse(lockMonth!);
+
+  const restored = await prisma.$transaction(async tx => {
+    const r = await tx.feeLedger.update({
+      where: { id },
+      data: { voidedAt: null, voidedBy: null, voidReason: null },
+    });
+    await writeFeeLedgerAudit({
+      entryId: id, studentId: existing.studentId, action: 'RESTORE',
+      before: snapshot(existing), after: snapshot(r),
+      userId: auth.userId, userName: body.actor, reason: body.reason,
+    }, tx);
+    return r;
   });
   const { balance } = await recomputeStudentLedger(existing.studentId);
   return Response.json({ restored: true, entry: restored, currentBalance: balance });

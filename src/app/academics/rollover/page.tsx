@@ -12,6 +12,7 @@ interface PreviewItem {
   numericGrade: number;
   studentCount: number;
   action: 'PROMOTE' | 'GRADUATE';
+  nextClassName: string | null;
 }
 
 interface RolloverResult {
@@ -180,7 +181,7 @@ export default function RolloverPage() {
                           ) : (
                             <ArrowUpCircle className="h-3 w-3" />
                           )}
-                          {item.action === 'GRADUATE' ? 'Graduate' : `Promote to Class ${item.numericGrade + 1}`}
+                          {item.action === 'GRADUATE' ? 'Graduate' : `Promote to ${item.nextClassName || `Class ${item.numericGrade + 1}`}`}
                         </span>
                       </td>
                     </tr>

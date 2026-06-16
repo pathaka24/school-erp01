@@ -10,7 +10,12 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   // Accept either validated schema or raw body with perStudentAmounts
-  const { studentIds, month, amount, paymentMethod, receivedBy, splitEvenly, perStudentAmounts } = body;
+  const { studentIds, month, amount, paymentMethod, receivedBy, splitEvenly, perStudentAmounts, entryDate } = body;
+
+  // Optional backdate for historical records (e.g. previous-year payments
+  // entered while backfilling a student's record). Defaults to now.
+  const parsedEntryDate = entryDate ? new Date(entryDate) : null;
+  const depositDate = parsedEntryDate && !isNaN(parsedEntryDate.getTime()) ? parsedEntryDate : new Date();
 
   if (!studentIds?.length || !month || !amount || !paymentMethod) {
     return Response.json({ error: 'studentIds, month, amount, and paymentMethod are required' }, { status: 400 });
@@ -59,7 +64,7 @@ export async function POST(request: NextRequest) {
           paymentMethod,
           receiptNumber: studentIds.length > 1 ? `${receiptBase}-${String(i + 1).padStart(2, '0')}` : receiptBase,
           receivedBy,
-          date: new Date(),
+          date: depositDate,
         },
       });
     }).filter(Boolean)

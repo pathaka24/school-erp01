@@ -42,46 +42,54 @@ export async function GET(request: NextRequest) {
     return Response.json({ ok: true, month, studentsCharged: 0, note: 'No classes have a monthly fee set' });
   }
 
-  // Never auto-charge soft-deleted (deactivated) students
+  // Never auto-charge soft-deleted (deactivated) or fee-exempt students
   const students = await prisma.student.findMany({
-    where: { user: { isActive: true } },
+    where: { user: { isActive: true }, feeExempt: false },
     select: { id: true, classId: true },
   });
 
   const entryDate = new Date(month + '-01T00:00:00Z');
   const monthLabel = new Date(month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
-  let charged = 0;
   let skipped = 0;
-  let totalAmount = 0;
 
+  // One query for all students already charged this month (instead of N findFirsts)
+  const existingRows = await prisma.feeLedger.findMany({
+    where: {
+      studentId: { in: students.map(s => s.id) },
+      month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null,
+    },
+    select: { studentId: true },
+  });
+  const alreadyCharged = new Set(existingRows.map(r => r.studentId));
+
+  const toCharge: { id: string; amount: number }[] = [];
   for (const s of students) {
     const amount = monthlyFeeByClass.get(s.classId);
-    if (!amount) { skipped++; continue; }
+    if (!amount || alreadyCharged.has(s.id)) { skipped++; continue; }
+    toCharge.push({ id: s.id, amount });
+  }
 
-    const existing = await prisma.feeLedger.findFirst({
-      where: { studentId: s.id, month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null },
-      select: { id: true },
-    });
-    if (existing) { skipped++; continue; }
-
-    await prisma.feeLedger.create({
-      data: {
-        studentId: s.id,
+  if (toCharge.length > 0) {
+    await prisma.feeLedger.createMany({
+      data: toCharge.map(t => ({
+        studentId: t.id,
         month,
         type: 'CHARGE',
         category: 'MONTHLY_FEE',
         description: `Monthly Fee - ${monthLabel}`,
-        amount,
+        amount: t.amount,
         balanceAfter: 0,
         date: entryDate,
-      },
+      })),
     });
-    await recomputeStudentLedger(s.id);
-
-    charged++;
-    totalAmount += amount;
+    for (const t of toCharge) {
+      await recomputeStudentLedger(t.id);
+    }
   }
+
+  const charged = toCharge.length;
+  const totalAmount = toCharge.reduce((s, t) => s + t.amount, 0);
 
   return Response.json({
     ok: true,

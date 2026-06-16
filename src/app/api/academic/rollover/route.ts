@@ -17,6 +17,7 @@ export async function GET() {
     numericGrade: c.numericGrade,
     studentCount: c._count.students,
     action: c.numericGrade >= 10 ? 'GRADUATE' : 'PROMOTE',
+    nextClassName: classes.find((n) => n.numericGrade === c.numericGrade + 1)?.name || null,
   }));
 
   return Response.json(preview);
@@ -71,6 +72,16 @@ export async function POST(request: NextRequest) {
           toGrade: 'GRADUATED',
           result: 'PROMOTED',
         },
+      });
+      // Deactivate so they drop off the rolls and are never billed again.
+      // They appear in the "Left Students" view and can be re-admitted.
+      await prisma.user.update({
+        where: { id: student.userId },
+        data: { isActive: false, deletedAt: new Date(), deletedBy: 'ROLLOVER' },
+      });
+      await prisma.student.update({
+        where: { id: student.id },
+        data: { leftReason: `Graduated (${fromYear})` },
       });
       continue;
     }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
@@ -15,14 +16,43 @@ const ACTION_COLORS: Record<string, string> = {
   RESTORE: 'bg-emerald-100 text-emerald-700',
 };
 
-export default function FeeAuditLogPage() {
+// Fields worth diffing in an UPDATE summary, with display labels
+const DIFF_FIELDS: [string, string][] = [
+  ['type', 'type'],
+  ['category', 'category'],
+  ['description', 'description'],
+  ['amount', 'amount'],
+  ['month', 'month'],
+  ['paymentMethod', 'method'],
+  ['receivedBy', 'received by'],
+  ['receiptNumber', 'receipt no.'],
+];
+
+function updateSummary(before: any, after: any): string {
+  if (!before || !after) return 'Updated';
+  const changes: string[] = [];
+  for (const [key, label] of DIFF_FIELDS) {
+    const b = before[key] ?? null;
+    const a = after[key] ?? null;
+    if (b === a) continue;
+    const fmt = (v: any) => v === null || v === '' ? '—' : key === 'amount' ? formatCurrency(v) : String(v);
+    changes.push(`${label}: ${fmt(b)} → ${fmt(a)}`);
+  }
+  return changes.length > 0 ? changes.join('; ') : 'No visible field changes';
+}
+
+function AuditLogContent() {
+  // Seed the student filter from ?studentId= so "Change history" links land
+  // pre-filtered. useSearchParams (not window.location) — it has the right
+  // value during client-side navigations too.
+  const searchParams = useSearchParams();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [actionFilter, setActionFilter] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [studentFilter, setStudentFilter] = useState('');
+  const [studentFilter, setStudentFilter] = useState(searchParams.get('studentId') || '');
   const [offset, setOffset] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const limit = 50;
@@ -133,15 +163,15 @@ export default function FeeAuditLogPage() {
                   {rows.map(r => {
                     const isOpen = expanded.has(r.id);
                     const summary = r.action === 'UPDATE'
-                      ? `Amount ${formatCurrency(r.before?.amount ?? 0)} → ${formatCurrency(r.after?.amount ?? 0)}`
+                      ? updateSummary(r.before, r.after)
                       : r.action === 'VOID'
                         ? `${r.before?.type || '?'} of ${formatCurrency(r.before?.amount ?? 0)}`
                         : r.action === 'RESTORE'
                           ? `Restored ${r.after?.type || '?'} of ${formatCurrency(r.after?.amount ?? 0)}`
                           : '';
                     return (
-                      <>
-                        <tr key={r.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => toggle(r.id)}>
+                      <Fragment key={r.id}>
+                        <tr className="hover:bg-slate-50 cursor-pointer" onClick={() => toggle(r.id)}>
                           <td className="px-3 py-2 text-slate-400">
                             {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           </td>
@@ -166,7 +196,7 @@ export default function FeeAuditLogPage() {
                           <td className="px-3 py-2 text-xs text-slate-600">{r.reason || '—'}</td>
                         </tr>
                         {isOpen && (
-                          <tr key={`${r.id}-details`}>
+                          <tr>
                             <td colSpan={7} className="bg-slate-50 px-6 py-3">
                               <div className="grid grid-cols-2 gap-4 text-xs">
                                 <div>
@@ -181,7 +211,7 @@ export default function FeeAuditLogPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -212,5 +242,14 @@ export default function FeeAuditLogPage() {
         </div>
       </PageTransition>
     </DashboardLayout>
+  );
+}
+
+// useSearchParams requires a Suspense boundary at the page level in Next 16
+export default function FeeAuditLogPage() {
+  return (
+    <Suspense fallback={null}>
+      <AuditLogContent />
+    </Suspense>
   );
 }

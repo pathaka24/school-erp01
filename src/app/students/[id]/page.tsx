@@ -1,9 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
+import { useAuthStore } from '@/lib/store';
+import { useFeedback } from '@/components/ui/feedback';
 import { formatDate, formatCurrency, getAcademicYears, getCurrentAcademicYear, compressImage } from '@/lib/utils';
 import PhotoCropper from '@/components/PhotoCropper';
 import { ArrowLeft, Save, User, Heart, MapPin, GraduationCap, School, History, Clock, Syringe, FileText, IndianRupee, Printer, BookOpen, CalendarCheck, Award, Camera, X, QrCode } from 'lucide-react';
@@ -30,28 +33,63 @@ const TABS = [
 export default function StudentProfilePage() {
   const { id } = useParams();
   const router = useRouter();
+  const authUser = useAuthStore(s => s.user);
+  const actorName = authUser ? `${authUser.firstName} ${authUser.lastName}`.trim() : undefined;
+  const { toast, confirm: confirmDialog } = useFeedback();
   const [student, setStudent] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('personal');
+
+  // Allow deep links like /students/<id>?tab=fees (used by the Dues report's
+  // Collect button). Mount effect, not initializer — runs after client-side
+  // navigation has settled the URL.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && TABS.some(x => x.id === t)) setActiveTab(t);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<any>({});
   const [ledgerData, setLedgerData] = useState<any>(null);
   const [ledgerFamily, setLedgerFamily] = useState(false);
-  const [ledgerView, setLedgerView] = useState<'all' | 'purchases' | 'entries'>('all');
+  const [ledgerView, setLedgerView] = useState<'all' | 'purchases' | 'entries' | 'summary'>('all');
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [entrySaving, setEntrySaving] = useState(false);
   const [showVoided, setShowVoided] = useState(false);
+  const [chargeSaving, setChargeSaving] = useState(false);
+  const [depositSaving, setDepositSaving] = useState(false);
+  const [ledgerLoading, setLedgerLoading] = useState(false);     // loading the ledger
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null); // per-row void/restore/delete in progress
+  const [bulkVoiding, setBulkVoiding] = useState(false);
+  const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
+  // Inline amount correction (click the number to fix it)
+  const [inlineAmount, setInlineAmount] = useState<{ id: string; value: string } | null>(null);
+  const [inlineAmountSaving, setInlineAmountSaving] = useState(false);
   const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
   const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
+  // Family view: per-child charge amounts (studentId -> amount string)
+  const [chargePerStudent, setChargePerStudent] = useState<Record<string, string>>({});
+  // Siblings (Parent Info tab)
+  const [siblingsInfo, setSiblingsInfo] = useState<{ familyName: string | null; siblings: any[] } | null>(null);
+  const [sibSearch, setSibSearch] = useState('');
+  const [sibResults, setSibResults] = useState<any[]>([]);
+  const [sibSearching, setSibSearching] = useState(false);
+  const [sibBusy, setSibBusy] = useState(false);
   const [showDepositForm, setShowDepositForm] = useState(false);
   const [showChargeForm, setShowChargeForm] = useState(false);
+  // Inline per-month deposit inside the ledger table
+  const [inlineDeposit, setInlineDeposit] = useState<{ month: string; amount: string; paymentMethod: string; receivedBy: string } | null>(null);
+  const [inlineDepositSaving, setInlineDepositSaving] = useState(false);
   const [showOpeningBalance, setShowOpeningBalance] = useState(false);
-  const [openingForm, setOpeningForm] = useState({ amount: '', year: '2024-2025', month: '' });
+  const [openingForm, setOpeningForm] = useState({ amount: '', paidAmount: '', paymentMethod: 'CASH', year: '2024-2025', month: '' });
   // Buy Class Kit form
   const [showKitForm, setShowKitForm] = useState(false);
   const [kitItems, setKitItems] = useState<{ selected: boolean; category: string; description: string; amount: string }[]>([]);
   const [kitDeposit, setKitDeposit] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '' });
   const [kitDiscount, setKitDiscount] = useState({ amount: '', reason: '' });
+  // Combined "kit + fees" bill — include this month's fee in the same transaction
+  const [kitMonthlyFee, setKitMonthlyFee] = useState(0);
+  const [kitMonthlyCharged, setKitMonthlyCharged] = useState(false);
+  const [kitIncludeFee, setKitIncludeFee] = useState(false);
   const [kitLoading, setKitLoading] = useState(false);
   const [kitSubmitting, setKitSubmitting] = useState(false);
   // Exam results
@@ -130,7 +168,7 @@ export default function StudentProfilePage() {
           emergencyContactPhone: res.data.emergencyContactPhone || '',
         });
       })
-      .catch(() => alert('Student not found'))
+      .catch(() => toast('error', 'Student not found'))
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -143,9 +181,9 @@ export default function StudentProfilePage() {
       if (payload.weight) payload.weight = parseFloat(payload.weight);
       if (!payload.category) delete payload.category;
       await api.put(`/students/${id}`, payload);
-      alert('Saved successfully!');
+      toast('success', 'Saved successfully');
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Failed to save');
+      toast('error', error.response?.data?.error || 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -172,7 +210,7 @@ export default function StudentProfilePage() {
       });
       setStudent((prev: any) => ({ ...prev, photo: data.photo }));
     } catch (err: any) {
-      alert(err.response?.data?.error || err.message || 'Upload failed');
+      toast('error', err.response?.data?.error || err.message || 'Upload failed');
     }
     setUploadingPhoto(false);
   };
@@ -185,6 +223,7 @@ export default function StudentProfilePage() {
   };
 
   const loadLedger = async () => {
+    setLedgerLoading(true);
     try {
       const r = await api.get(`/fees/ledger/${id}?family=${ledgerFamily}&includeVoided=${showVoided}`);
       setLedgerData(r.data);
@@ -193,6 +232,7 @@ export default function StudentProfilePage() {
         setLedgerFamily(true);
       }
     } catch { setLedgerData(null); }
+    finally { setLedgerLoading(false); }
   };
 
   useEffect(() => {
@@ -252,36 +292,169 @@ export default function StudentProfilePage() {
 
   const handleDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (depositSaving) return; // guard against double-submit
     const studentIds = ledgerFamily && ledgerData?.siblings?.length
       ? ledgerData.siblings.map((s: any) => s.id)
       : [id];
-    await api.post('/fees/ledger/deposit', {
-      studentIds,
-      month: depositForm.month || currentMonth(),
-      amount: parseFloat(depositForm.amount),
-      paymentMethod: depositForm.paymentMethod,
-      receivedBy: depositForm.receivedBy || undefined,
-    });
-    setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
-    setShowDepositForm(false);
-    loadLedger();
+    setDepositSaving(true);
+    try {
+      await api.post('/fees/ledger/deposit', {
+        studentIds,
+        month: depositForm.month || currentMonth(),
+        amount: parseFloat(depositForm.amount),
+        paymentMethod: depositForm.paymentMethod,
+        receivedBy: depositForm.receivedBy || undefined,
+      });
+      setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
+      setShowDepositForm(false);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to record deposit');
+    } finally {
+      setDepositSaving(false);
+    }
   };
 
   const handleCharge = async (e: React.FormEvent) => {
     e.preventDefault();
-    const studentIds = ledgerFamily && ledgerData?.siblings?.length
-      ? ledgerData.siblings.map((s: any) => s.id)
-      : [id];
-    await api.post('/fees/ledger/charge', {
-      studentIds,
-      month: chargeForm.month || currentMonth(),
-      category: chargeForm.category,
-      description: chargeForm.description || chargeForm.category.replace(/_/g, ' '),
-      amount: parseFloat(chargeForm.amount),
+    if (chargeSaving) return; // guard against double-submit
+    const isFamily = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+    setChargeSaving(true);
+    try {
+      const payload: any = {
+        month: chargeForm.month || currentMonth(),
+        category: chargeForm.category,
+        description: chargeForm.description || chargeForm.category.replace(/_/g, ' '),
+      };
+      if (isFamily) {
+        // Per-child amounts (Saurya ₹700, Somya ₹650…)
+        const perStudentAmounts: Record<string, number> = {};
+        let rep = 0;
+        for (const sib of ledgerData.siblings) {
+          const v = parseFloat(chargePerStudent[sib.id]) || 0;
+          if (v > 0) { perStudentAmounts[sib.id] = v; rep = Math.max(rep, v); }
+        }
+        if (rep <= 0) { toast('error', 'Enter an amount for at least one child'); setChargeSaving(false); return; }
+        payload.studentIds = ledgerData.siblings.map((s: any) => s.id);
+        payload.amount = rep; // representative (per-student map overrides)
+        payload.perStudentAmounts = perStudentAmounts;
+      } else {
+        payload.studentIds = [id];
+        payload.amount = parseFloat(chargeForm.amount);
+      }
+      await api.post('/fees/ledger/charge', payload);
+      setChargeForm({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
+      setChargePerStudent({});
+      setShowChargeForm(false);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to add charge');
+    } finally {
+      setChargeSaving(false);
+    }
+  };
+
+  const openInlineDeposit = (row: any) => {
+    const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0));
+    setInlineDeposit({
+      month: row.month,
+      amount: monthDue > 0 ? String(monthDue) : '',
+      paymentMethod: 'CASH',
+      receivedBy: actorName || '',
     });
-    setChargeForm({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
-    setShowChargeForm(false);
-    loadLedger();
+  };
+
+  const saveInlineDeposit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inlineDeposit) return;
+    setInlineDepositSaving(true);
+    try {
+      await api.post('/fees/ledger/deposit', {
+        studentIds: [id],
+        month: inlineDeposit.month,
+        amount: parseFloat(inlineDeposit.amount),
+        paymentMethod: inlineDeposit.paymentMethod,
+        receivedBy: inlineDeposit.receivedBy || undefined,
+      });
+      const label = new Date(inlineDeposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+      toast('success', `Deposit recorded for ${label}`);
+      setInlineDeposit(null);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to record deposit');
+    } finally {
+      setInlineDepositSaving(false);
+    }
+  };
+
+  const loadSiblings = async () => {
+    try {
+      const { data } = await api.get(`/students/${id}/siblings`);
+      setSiblingsInfo({ familyName: data.familyName, siblings: data.siblings || [] });
+    } catch { setSiblingsInfo({ familyName: null, siblings: [] }); }
+  };
+
+  const searchSiblingStudents = async () => {
+    if (!sibSearch.trim()) return;
+    setSibSearching(true);
+    try {
+      const { data } = await api.get('/students', { params: { search: sibSearch.trim() } });
+      // exclude self and current siblings
+      const existing = new Set([id, ...(siblingsInfo?.siblings || []).map((s: any) => s.id)]);
+      setSibResults((data || []).filter((s: any) => !existing.has(s.id)).slice(0, 6));
+    } catch { setSibResults([]); }
+    finally { setSibSearching(false); }
+  };
+
+  const connectSibling = async (siblingId: string, name: string) => {
+    setSibBusy(true);
+    try {
+      await api.post(`/students/${id}/link-sibling`, { siblingId });
+      toast('success', `${name} connected as sibling`);
+      setSibSearch(''); setSibResults([]);
+      loadSiblings();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to connect sibling');
+    } finally {
+      setSibBusy(false);
+    }
+  };
+
+  const removeSibling = async (sibling: any) => {
+    const res = await confirmDialog({
+      title: `Remove ${sibling.name} as a sibling?`,
+      message: 'They will be disconnected from this family. No student records are deleted. You can reconnect them later.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!res.confirmed) return;
+    setSibBusy(true);
+    try {
+      await api.delete(`/students/${id}/link-sibling`, { params: { siblingId: sibling.id } });
+      toast('success', `${sibling.name} removed from family`);
+      loadSiblings();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to remove sibling');
+    } finally {
+      setSibBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'parent') loadSiblings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  const toggleFeeExempt = async (checked: boolean) => {
+    try {
+      await api.put(`/students/${id}`, { feeExempt: checked });
+      setStudent((prev: any) => ({ ...prev, feeExempt: checked }));
+      toast('success', checked
+        ? 'Monthly fee generation disabled for this student'
+        : 'Monthly fee generation re-enabled');
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to update');
+    }
   };
 
   const handleEntrySave = async (e: React.FormEvent) => {
@@ -298,34 +471,163 @@ export default function StudentProfilePage() {
         paymentMethod: editingEntry.paymentMethod,
         receivedBy: editingEntry.receivedBy,
         receiptNumber: editingEntry.receiptNumber,
+        _actor: actorName,
+        reason: editingEntry._reason,
       });
       setEditingEntry(null);
+      toast('success', 'Entry updated');
       loadLedger();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to update entry');
+      toast('error', err.response?.data?.error || 'Failed to update entry');
     } finally {
       setEntrySaving(false);
     }
   };
 
   const handleEntryDelete = async (entry: any) => {
-    const reason = prompt(`Void this ${entry.type.toLowerCase()} of ₹${entry.amount}?\n\nThe row will be hidden but kept for audit. Enter a reason:`);
-    if (reason === null) return; // cancelled
+    const res = await confirmDialog({
+      title: `Void this ${entry.type.toLowerCase()} of ${formatCurrency(entry.amount)}?`,
+      message: 'The row will be hidden from the ledger but kept for audit. It can be restored later.',
+      confirmLabel: 'Void entry',
+      danger: true,
+      input: { label: 'Reason', placeholder: 'e.g. Duplicate entry, wrong student…', required: true },
+    });
+    if (!res.confirmed) return;
+    setBusyEntryId(entry.id);
     try {
-      await api.delete(`/fees/ledger/entry/${entry.id}`, { params: { reason: reason || 'No reason given' } });
+      await api.delete(`/fees/ledger/entry/${entry.id}`, { params: { reason: res.value || 'No reason given', actor: actorName } });
+      toast('success', 'Entry voided');
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to void entry');
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  // Void every previous-record entry (PREVIOUS_BALANCE charges + their
+  // backdated deposits) in one go, with a single reason
+  const removeAllPreviousRecords = async (records: any[]) => {
+    const res = await confirmDialog({
+      title: `Remove all ${records.length} previous-record entries?`,
+      message: 'Each entry is voided — recoverable later via All Entries → Show voided. Balances recalculate immediately.',
+      confirmLabel: 'Remove all',
+      danger: true,
+      input: { label: 'Reason', placeholder: 'e.g. Wrong amounts, re-entering previous record…', required: true },
+    });
+    if (!res.confirmed) return;
+    try {
+      for (const e of records) {
+        await api.delete(`/fees/ledger/entry/${e.id}`, { params: { reason: res.value, actor: actorName } });
+      }
+      toast('success', `${records.length} previous-record entries removed`);
       loadLedger();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to void entry');
+      toast('error', err.response?.data?.error || 'Failed to remove previous records');
+      loadLedger();
+    }
+  };
+
+  const handleEntryHardDelete = async (entry: any) => {
+    const res = await confirmDialog({
+      title: `Permanently delete this ${entry.type.toLowerCase()} of ${formatCurrency(entry.amount)}?`,
+      message: 'This cannot be undone. The row is removed from the database entirely — only the audit log keeps a snapshot of it.',
+      confirmLabel: 'Delete forever',
+      danger: true,
+      input: { label: 'Reason', placeholder: 'e.g. Test data, entered on wrong student…', required: true },
+    });
+    if (!res.confirmed) return;
+    setBusyEntryId(entry.id);
+    try {
+      await api.delete(`/fees/ledger/entry/${entry.id}`, { params: { hard: 'true', reason: res.value, actor: actorName } });
+      toast('success', 'Entry permanently deleted');
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to delete entry');
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  // Can this entry be voided right now? (not already voided, not in a locked month)
+  const isEntryVoidable = (e: any) =>
+    !e.voidedAt && !(ledgerData?.feeLockMonth && e.month <= ledgerData.feeLockMonth);
+
+  // Quick inline amount fix — auto-records a descriptive reason for the audit log
+  const saveInlineAmount = async (entry: any) => {
+    if (!inlineAmount) return;
+    const newAmt = parseFloat(inlineAmount.value);
+    if (isNaN(newAmt) || newAmt < 0) { toast('error', 'Enter a valid amount'); return; }
+    if (Math.abs(newAmt - entry.amount) < 0.005) { setInlineAmount(null); return; }
+    setInlineAmountSaving(true);
+    try {
+      await api.patch(`/fees/ledger/entry/${entry.id}`, {
+        amount: newAmt,
+        reason: `Amount corrected: ${formatCurrency(entry.amount)} → ${formatCurrency(newAmt)}`,
+        _actor: actorName,
+      });
+      toast('success', `Amount changed to ${formatCurrency(newAmt)}`);
+      setInlineAmount(null);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to update amount');
+    } finally {
+      setInlineAmountSaving(false);
+    }
+  };
+
+  const toggleEntrySelect = (id: string) => {
+    setSelectedEntries(s => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  const handleBulkVoid = async () => {
+    const entries = (ledgerData?.entries || []).filter((e: any) => selectedEntries.has(e.id) && isEntryVoidable(e));
+    if (entries.length === 0) return;
+    const total = entries.reduce((s: number, e: any) => s + e.amount, 0);
+    const res = await confirmDialog({
+      title: `Void ${entries.length} selected ${entries.length === 1 ? 'entry' : 'entries'}?`,
+      message: `Total ${formatCurrency(total)}. Each is voided (hidden but kept for audit, restorable later). Balances recalculate.`,
+      confirmLabel: 'Void selected',
+      danger: true,
+      input: { label: 'Reason (applied to all)', placeholder: 'e.g. Duplicate entries, correcting…', required: true },
+    });
+    if (!res.confirmed) return;
+    setBulkVoiding(true);
+    try {
+      for (const e of entries) {
+        await api.delete(`/fees/ledger/entry/${e.id}`, { params: { reason: res.value, actor: actorName } });
+      }
+      toast('success', `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} voided`);
+      setSelectedEntries(new Set());
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to void some entries');
+      await loadLedger();
+    } finally {
+      setBulkVoiding(false);
     }
   };
 
   const handleEntryRestore = async (entry: any) => {
-    if (!confirm(`Restore this voided ${entry.type.toLowerCase()} of ₹${entry.amount}?`)) return;
+    const res = await confirmDialog({
+      title: `Restore this voided ${entry.type.toLowerCase()} of ${formatCurrency(entry.amount)}?`,
+      message: 'The entry will reappear in the ledger and balances will be recalculated.',
+      confirmLabel: 'Restore',
+    });
+    if (!res.confirmed) return;
+    setBusyEntryId(entry.id);
     try {
-      await api.post(`/fees/ledger/entry/${entry.id}`, {});
-      loadLedger();
+      await api.post(`/fees/ledger/entry/${entry.id}`, { actor: actorName });
+      toast('success', 'Entry restored');
+      await loadLedger();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to restore entry');
+      toast('error', err.response?.data?.error || 'Failed to restore entry');
+    } finally {
+      setBusyEntryId(null);
     }
   };
 
@@ -336,7 +638,7 @@ export default function StudentProfilePage() {
       const res = await api.get(`/fees/ledger/entry/${entryId}/receipt`);
       data = res.data;
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to load receipt');
+      toast('error', err.response?.data?.error || 'Failed to load receipt');
       return;
     }
     const monthLabel = new Date(data.deposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -424,17 +726,41 @@ export default function StudentProfilePage() {
 
   const handleOpeningBalance = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (chargeSaving) return; // guard against double-submit
     const month = openingForm.month || (openingForm.year.split('-')[0] + '-04'); // default to April of first year
-    await api.post('/fees/ledger/charge', {
-      studentIds: [id],
-      month,
-      category: 'PREVIOUS_BALANCE',
-      description: `Previous balance (${openingForm.year})`,
-      amount: parseFloat(openingForm.amount),
-    });
-    setOpeningForm({ amount: '', year: '2024-2025', month: '' });
-    setShowOpeningBalance(false);
-    loadLedger();
+    const charged = parseFloat(openingForm.amount) || 0;
+    const paid = parseFloat(openingForm.paidAmount) || 0;
+    setChargeSaving(true);
+    try {
+      if (charged > 0) {
+        await api.post('/fees/ledger/charge', {
+          studentIds: [id],
+          month,
+          category: 'PREVIOUS_BALANCE',
+          description: `Previous balance (${openingForm.year})`,
+          amount: charged,
+        });
+      }
+      // Previous payments already made — backdated deposit in the same month
+      if (paid > 0) {
+        await api.post('/fees/ledger/deposit', {
+          studentIds: [id],
+          month,
+          amount: paid,
+          paymentMethod: openingForm.paymentMethod,
+          receivedBy: actorName || undefined,
+          entryDate: month + '-01T00:00:00Z',
+        });
+      }
+      toast('success', `Previous record saved — ${formatCurrency(charged)} charged, ${formatCurrency(paid)} paid, net ${formatCurrency(Math.max(0, charged - paid))} carried forward`);
+      setOpeningForm({ amount: '', paidAmount: '', paymentMethod: 'CASH', year: '2024-2025', month: '' });
+      setShowOpeningBalance(false);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to save previous record');
+    } finally {
+      setChargeSaving(false);
+    }
   };
 
   // ─── Buy Class Kit ───
@@ -446,6 +772,15 @@ export default function StudentProfilePage() {
       const { data } = await api.get('/settings/fee-plan');
       const classId = student?.class?.id || student?.classId;
       const classPlan = data?.classes?.find((c: any) => c.classId === classId);
+      // Monthly fee for "kit + fees together" — offer it only if not already
+      // charged this month
+      const mFee = Number(classPlan?.monthlyFee) || 0;
+      const alreadyCharged = (ledgerData?.entries || []).some(
+        (e: any) => !e.voidedAt && e.type === 'CHARGE' && e.category === 'MONTHLY_FEE' && e.month === currentMonth()
+      );
+      setKitMonthlyFee(mFee);
+      setKitMonthlyCharged(alreadyCharged);
+      setKitIncludeFee(false);
       const charges = (classPlan?.charges || []).map((c: any) => ({
         selected: parseFloat(c.amount) > 0,
         category: c.category || 'AD_HOC',
@@ -477,14 +812,27 @@ export default function StudentProfilePage() {
   const kitDiscountAmount = Math.min(parseFloat(kitDiscount.amount) || 0, kitSelectedTotal);
   const kitNetTotal = kitSelectedTotal - kitDiscountAmount;
 
+  // Combined bill: kit (net) + this month's fee (if included) = new charges.
+  // Previous dues are already on the ledger; total payable includes them.
+  const kitFeeAmount = kitIncludeFee && !kitMonthlyCharged ? kitMonthlyFee : 0;
+  const kitNewCharges = kitNetTotal + kitFeeAmount;
+  const kitPrevDues = (ledgerData?.currentBalance || 0) > 0 ? ledgerData.currentBalance : 0;
+  const kitTotalPayable = kitNewCharges + kitPrevDues;
+  const kitPaidNow = parseFloat(kitDeposit.amount) || 0;
+  const kitBalanceAfter = kitTotalPayable - kitPaidNow;
+
   const handleKitSubmit = async () => {
     const picked = kitItems.filter(k => k.selected && (parseFloat(k.amount) || 0) > 0);
-    if (picked.length === 0) { alert('Select at least one item with an amount'); return; }
+    if (picked.length === 0) { toast('error', 'Select at least one item with an amount'); return; }
     setKitSubmitting(true);
     try {
-      const payload: any = {
-        items: picked.map(k => ({ category: k.category, description: k.description, amount: parseFloat(k.amount) })),
-      };
+      const items = picked.map(k => ({ category: k.category, description: k.description, amount: parseFloat(k.amount) }));
+      // Add this month's fee as a charge in the same transaction (kit + fees)
+      if (kitFeeAmount > 0) {
+        const label = new Date(currentMonth() + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+        items.push({ category: 'MONTHLY_FEE', description: `Monthly Fee - ${label}`, amount: kitFeeAmount });
+      }
+      const payload: any = { items };
       const discAmt = parseFloat(kitDiscount.amount) || 0;
       if (discAmt > 0) {
         payload.discount = { amount: discAmt, reason: kitDiscount.reason || null };
@@ -494,14 +842,17 @@ export default function StudentProfilePage() {
         payload.deposit = { amount: depositAmt, paymentMethod: kitDeposit.paymentMethod, receivedBy: kitDeposit.receivedBy || null };
       }
       const { data } = await api.post(`/fees/ledger/kit-purchase/${id}`, payload);
-      printKitReceipt(data, picked);
+      // Receipt lists everything billed in this transaction, incl. the fee line
+      printKitReceipt(data, items.map(it => ({ category: it.category, description: it.description, amount: String(it.amount) })));
       setShowKitForm(false);
       setKitItems([]);
       setKitDeposit({ amount: '', paymentMethod: 'CASH', receivedBy: '' });
       setKitDiscount({ amount: '', reason: '' });
+      setKitIncludeFee(false);
+      toast('success', 'Bill saved' + (kitPaidNow > 0 ? ` — ₹${kitPaidNow.toLocaleString('en-IN')} collected` : ''));
       loadLedger();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Kit purchase failed');
+      toast('error', err.response?.data?.error || 'Kit purchase failed');
     } finally {
       setKitSubmitting(false);
     }
@@ -515,6 +866,8 @@ export default function StudentProfilePage() {
     const balance = data.balanceAfter || 0;
     const disc = data.discountAmount || 0;
     const netCharged = data.netCharged != null ? data.netCharged : (data.totalCharged || 0) - disc;
+    // No payment → this is a bill/invoice, not a receipt
+    const docTitle = paid > 0 ? 'KIT PURCHASE RECEIPT' : 'BILL / INVOICE — UNPAID';
     const html = `<!DOCTYPE html><html><head><title>Kit Purchase - ${data.receiptNumber}</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -537,7 +890,7 @@ export default function StudentProfilePage() {
   <div class="header">
     <div class="school">PATHAK EDUCATIONAL FOUNDATION SCHOOL</div>
     <div style="font-size:11px;color:#666">Salarpur, Sector - 101 | Ph: 6397339902</div>
-    <div style="font-size:14px;font-weight:bold;color:#1e293b;margin-top:6px">KIT PURCHASE RECEIPT</div>
+    <div style="font-size:14px;font-weight:bold;color:#1e293b;margin-top:6px">${docTitle}</div>
     <div class="rcp">${data.receiptNumber}</div>
     <div style="font-size:11px;color:#666">Date: ${new Date().toLocaleString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}</div>
   </div>
@@ -578,6 +931,80 @@ export default function StudentProfilePage() {
     <div class="sig-line">Accountant</div>
     <div class="sig-line">Principal</div>
   </div>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  };
+
+  const printExpenseSummary = (rows: { label: string; charged: number; paid: number; due: number }[], tot: { charged: number; paid: number; due: number }) => {
+    if (!ledgerData) return;
+    const s = ledgerData.student;
+    const fmt = (n: number) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const body = rows.map(r => `<tr>
+      <td style="padding:7px 12px;border:1px solid #cbd5e1">${r.label}</td>
+      <td style="padding:7px 12px;border:1px solid #cbd5e1;text-align:right">${fmt(r.charged)}</td>
+      <td style="padding:7px 12px;border:1px solid #cbd5e1;text-align:right;color:#16a34a">${fmt(r.paid)}</td>
+      <td style="padding:7px 12px;border:1px solid #cbd5e1;text-align:right;font-weight:600;color:${r.due > 0 ? '#dc2626' : '#64748b'}">${r.due > 0 ? fmt(r.due) : '—'}</td>
+    </tr>`).join('');
+    const html = `<!DOCTYPE html><html><head><title>Expense Statement — ${s?.name || ''}</title>
+<style>body{font-family:Arial,sans-serif;margin:24px;color:#1e293b}h1{font-size:18px;color:#1e40af;margin:0}
+.sub{font-size:12px;color:#64748b;margin:2px 0 16px}table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase}
+.tot td{background:#dcfce7;font-weight:bold;font-size:14px;padding:9px 12px;border:1px solid #cbd5e1}</style></head>
+<body>
+  <h1>Fee Expense Statement</h1>
+  <div class="sub">${s?.name || ''} · ${s?.class || ''}${s?.section ? ' - ' + s.section : ''} · Adm. No. ${s?.admissionNo || ''} · Printed ${new Date().toLocaleDateString('en-IN')}</div>
+  <table>
+    <thead><tr><th>Category</th><th style="text-align:right">Charged</th><th style="text-align:right">Paid</th><th style="text-align:right">Due</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr class="tot">
+      <td>TOTAL</td>
+      <td style="text-align:right">${fmt(tot.charged)}</td>
+      <td style="text-align:right;color:#15803d">${fmt(tot.paid)}</td>
+      <td style="text-align:right;color:${tot.due > 0 ? '#dc2626' : '#15803d'}">${tot.due > 0 ? fmt(tot.due) : 'ALL PAID'}</td>
+    </tr></tfoot>
+  </table>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  };
+
+  // Printable / savable record of everything a student has bought, grouped by
+  // purchase. The browser print dialog's "Save as PDF" keeps a copy.
+  const printPurchaseHistory = (txns: { date: string; items: any[]; discount: number; paid: number; dep: any; net: number }[]) => {
+    if (!ledgerData) return;
+    const s = ledgerData.student;
+    const fmt = (n: number) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const fmtDT = (d: string) => new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+    let gNet = 0, gPaid = 0;
+    const blocks = txns.map(tx => {
+      gNet += tx.net; gPaid += tx.paid;
+      const rows = tx.items.map(it => `<tr>
+        <td style="padding:5px 10px;border:1px solid #e2e8f0">${(it.category || '').replace(/_/g, ' ')}</td>
+        <td style="padding:5px 10px;border:1px solid #e2e8f0">${it.description}</td>
+        <td style="padding:5px 10px;border:1px solid #e2e8f0;text-align:right">${fmt(it.amount)}</td>
+      </tr>`).join('');
+      const due = tx.net - tx.paid;
+      return `<div class="tx">
+        <div class="txh">${fmtDT(tx.date)}${tx.dep?.receiptNumber ? ' &nbsp;·&nbsp; ' + tx.dep.receiptNumber : ''}</div>
+        <table>${rows}</table>
+        <div class="txf">${tx.discount > 0 ? 'Discount −' + fmt(tx.discount) + ' &nbsp;·&nbsp; ' : ''}Total <b>${fmt(tx.net)}</b> &nbsp;·&nbsp; Paid <b style="color:#15803d">${fmt(tx.paid)}</b> &nbsp;·&nbsp; ${due > 0 ? 'Due <b style="color:#dc2626">' + fmt(due) + '</b>' : '<b style="color:#15803d">Settled</b>'}</div>
+      </div>`;
+    }).join('');
+    const html = `<!DOCTYPE html><html><head><title>Purchase Record — ${s?.name || ''}</title>
+<style>body{font-family:Arial,sans-serif;margin:24px;color:#1e293b}h1{font-size:18px;color:#1e40af;margin:0}
+.sub{font-size:12px;color:#64748b;margin:2px 0 16px}
+.tx{border:1px solid #cbd5e1;border-radius:6px;margin-bottom:10px;overflow:hidden}
+.txh{background:#f1f5f9;padding:6px 10px;font-size:12px;font-weight:600}
+.tx table{width:100%;border-collapse:collapse;font-size:12px}
+.txf{padding:6px 10px;font-size:12px;text-align:right;border-top:1px solid #e2e8f0}
+.grand{margin-top:14px;padding:10px 12px;background:#dcfce7;border-radius:6px;font-weight:bold;display:flex;justify-content:space-between;font-size:14px}
+@media print{body{margin:10px}}</style></head>
+<body>
+  <h1>Purchase Record</h1>
+  <div class="sub">${s?.name || ''} · ${s?.class || ''}${s?.section ? ' - ' + s.section : ''} · Adm. No. ${s?.admissionNo || ''} · ${txns.length} purchase${txns.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString('en-IN')}</div>
+  ${blocks || '<p style="color:#64748b">No purchases recorded.</p>'}
+  <div class="grand"><span>GRAND TOTAL — ${txns.length} purchase${txns.length === 1 ? '' : 's'}</span><span>Billed ${fmt(gNet)} &nbsp;·&nbsp; Paid ${fmt(gPaid)} &nbsp;·&nbsp; ${gNet - gPaid > 0 ? 'Due ' + fmt(gNet - gPaid) : 'All settled'}</span></div>
 </body></html>`;
     const w = window.open('', '_blank');
     if (w) { w.document.write(html); w.document.close(); w.print(); }
@@ -1203,6 +1630,78 @@ export default function StudentProfilePage() {
           {/* PARENT INFO TAB */}
           {activeTab === 'parent' && (
             <div className="space-y-6">
+              {/* Siblings */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                  <h2 className="text-lg font-semibold text-slate-900">Siblings</h2>
+                  {siblingsInfo?.familyName && <span className="text-xs text-slate-500">Family: {siblingsInfo.familyName}</span>}
+                </div>
+
+                {/* Current siblings */}
+                {siblingsInfo && siblingsInfo.siblings.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {siblingsInfo.siblings.map((s: any) => (
+                      <div key={s.id} className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm">
+                        <button onClick={() => router.push(`/students/${s.id}`)} className="flex items-center gap-1 hover:underline">
+                          {s.name} <span className="text-xs text-blue-400">— {s.class}{s.section ? ` ${s.section}` : ''}</span>
+                          {!s.active && <span className="text-[10px] text-amber-600">(left)</span>}
+                        </button>
+                        <button onClick={() => removeSibling(s)} disabled={sibBusy}
+                          title="Remove from family" className="p-0.5 text-blue-300 hover:text-red-600 disabled:opacity-50">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400 mb-4">No siblings connected yet.</p>
+                )}
+
+                {/* Connect existing student */}
+                <div className="border-t border-slate-100 pt-3">
+                  <p className="text-sm font-medium text-slate-700 mb-2">Add a sibling</p>
+                  <div className="flex gap-2">
+                    <input placeholder="Search a student already in school by name…" value={sibSearch}
+                      onChange={e => setSibSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchSiblingStudents()}
+                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    <button onClick={searchSiblingStudents} disabled={sibSearching}
+                      className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800 disabled:opacity-50">
+                      {sibSearching ? '…' : 'Search'}
+                    </button>
+                  </div>
+
+                  {sibResults.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {sibResults.map((s: any) => (
+                        <div key={s.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                          <div>
+                            <span className="text-sm font-medium text-slate-900">{s.user.firstName} {s.user.lastName}</span>
+                            <span className="text-xs text-slate-500 ml-2">{s.admissionNo} · {s.class?.name}</span>
+                          </div>
+                          <button onClick={() => connectSibling(s.id, `${s.user.firstName} ${s.user.lastName}`)} disabled={sibBusy}
+                            className="px-2.5 py-1 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                            Connect
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sibSearch.trim() && sibResults.length === 0 && !sibSearching && (
+                    <div className="mt-2 flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <span className="text-xs text-amber-800">Not in school yet? Admit them as a new sibling — parent details carry over.</span>
+                      <button onClick={() => router.push(`/admission?sibling=${student?.admissionNo || ''}`)}
+                        className="px-3 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700 shrink-0">
+                        + Admit New Sibling
+                      </button>
+                    </div>
+                  )}
+                  <button onClick={() => router.push(`/admission?sibling=${student?.admissionNo || ''}`)}
+                    className="mt-3 text-xs text-green-700 hover:underline">
+                    Sibling not in school? Admit a new sibling →
+                  </button>
+                </div>
+              </div>
+
               <h2 className="text-lg font-semibold text-slate-900">Father&apos;s Information</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <Field label="Father's Name" value={form.fatherName} onChange={v => updateField('fatherName', v)} />
@@ -1743,77 +2242,122 @@ export default function StudentProfilePage() {
           {/* FEE LEDGER TAB */}
           {activeTab === 'fees' && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Fee Ledger</h2>
-                  {ledgerData?.student?.familyName && (
-                    <p className="text-sm text-slate-500">Family: {ledgerData.student.familyName}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {ledgerData?.siblings?.length > 1 && (
-                    <label className="flex items-center gap-2 text-sm text-slate-600">
-                      <input type="checkbox" checked={ledgerFamily} onChange={e => setLedgerFamily(e.target.checked)} />
-                      Family view
+              {/* Organised top section: title + toggles, summary dashboard, action toolbar */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+                {/* Row 1 — title + options */}
+                <div className="flex items-start justify-between flex-wrap gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">Fee Ledger</h2>
+                    {ledgerData?.student?.familyName && (
+                      <p className="text-sm text-slate-500">Family: {ledgerData.student.familyName}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer"
+                      title="When checked, this student is skipped by monthly fee generation (manual and automatic)">
+                      <input type="checkbox" checked={!!student?.feeExempt} onChange={e => toggleFeeExempt(e.target.checked)} />
+                      No auto monthly fee
                     </label>
-                  )}
+                    {ledgerData?.siblings?.length > 1 && (
+                      <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                        <input type="checkbox" checked={ledgerFamily} onChange={e => setLedgerFamily(e.target.checked)} />
+                        Family view
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                {/* Row 2 — summary dashboard */}
+                {(() => {
+                  const billed = ledgerData?.totals?.totalCharged || 0;
+                  const paid = ledgerData?.totals?.totalDeposited || 0;
+                  const balance = ledgerData?.currentBalance || 0;
+                  const cm = currentMonth();
+                  const ents = ledgerData?.entries || [];
+                  const mCharge = ents.filter((e: any) => !e.voidedAt && e.type === 'CHARGE' && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
+                  const mPaid = ents.filter((e: any) => !e.voidedAt && e.type === 'DEPOSIT' && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
+                  const mDue = mCharge - mPaid;
+                  const cmLabel = new Date(cm + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+                  return (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="rounded-lg border border-slate-200 p-3">
+                        <p className="text-xs text-slate-500">Total Billed</p>
+                        <p className="text-xl font-bold text-slate-900">{formatCurrency(billed)}</p>
+                      </div>
+                      <div className="rounded-lg border border-green-200 bg-green-50/50 p-3">
+                        <p className="text-xs text-slate-500">Total Paid</p>
+                        <p className="text-xl font-bold text-green-600">{formatCurrency(paid)}</p>
+                      </div>
+                      <div className={`rounded-lg border p-3 ${balance > 0 ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
+                        <p className="text-xs text-slate-500">Balance Due</p>
+                        <p className={`text-xl font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(Math.max(0, balance))}</p>
+                        <p className={`text-[11px] ${balance > 0 ? 'text-red-500' : 'text-green-600'}`}>{balance > 0 ? 'Dues pending' : 'All cleared'}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 p-3">
+                        <p className="text-xs text-slate-500">This Month ({cmLabel})</p>
+                        <p className={`text-xl font-bold ${mDue > 0 ? 'text-amber-600' : 'text-green-600'}`}>{mDue > 0 ? formatCurrency(mDue) : 'Cleared'}</p>
+                        {mDue > 0 && <p className="text-[11px] text-amber-500">due this month</p>}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Siblings pills */}
+                {ledgerData?.siblings?.length > 1 && (
+                  <div className="flex gap-2 flex-wrap">
+                    {ledgerData.siblings.map((s: any) => (
+                      <span key={s.id} className="px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium">
+                        {s.name} — {s.class}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Row 3 — action toolbar */}
+                <div className="flex items-center gap-2 flex-wrap pt-3 border-t border-slate-100">
+                  <span className="text-xs font-medium text-slate-400 uppercase mr-1">Actions</span>
+                  <button onClick={() => { setShowDepositForm(!showDepositForm); setShowChargeForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
+                    + Deposit
+                  </button>
+                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
+                    + Charge
+                  </button>
                   <button onClick={() => showKitForm ? setShowKitForm(false) : openKitForm()} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
                     🛍️ Buy Kit
                   </button>
                   <button onClick={() => { setShowOpeningBalance(!showOpeningBalance); setShowChargeForm(false); setShowDepositForm(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">
                     Opening Balance
                   </button>
-                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
-                    + Charge
-                  </button>
-                  <button onClick={() => { setShowDepositForm(!showDepositForm); setShowChargeForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
-                    + Deposit
-                  </button>
                   {ledgerData?.ledger?.length > 0 && (
-                    <button onClick={handlePrintLedger} className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800">
-                      <Printer className="h-3.5 w-3.5" /> Print
+                    <button onClick={handlePrintLedger} className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800 ml-auto">
+                      <Printer className="h-3.5 w-3.5" /> Print Ledger
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Siblings info */}
-              {ledgerData?.siblings?.length > 1 && (
-                <div className="flex gap-3 flex-wrap">
-                  {ledgerData.siblings.map((s: any) => (
-                    <span key={s.id} className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium">
-                      {s.name} — {s.class}
-                    </span>
-                  ))}
+              {/* Loading indicator */}
+              {ledgerLoading && (
+                <div className="flex items-center justify-center gap-2 py-3 text-sm text-slate-500">
+                  <span className="h-4 w-4 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
+                  {ledgerData ? 'Updating ledger…' : 'Loading ledger…'}
                 </div>
               )}
 
-              {/* Balance card */}
-              <div className={`rounded-xl p-5 border ${ledgerData?.currentBalance > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-                <p className="text-sm text-slate-600">Current Balance</p>
-                <p className={`text-3xl font-bold ${ledgerData?.currentBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {formatCurrency(ledgerData?.currentBalance || 0)}
-                </p>
-                {ledgerData?.currentBalance > 0 && <p className="text-sm text-red-500 mt-1">Dues pending</p>}
-                {ledgerData?.currentBalance <= 0 && <p className="text-sm text-green-600 mt-1">All dues cleared</p>}
-              </div>
-
-              {/* View toggle: all ledger vs purchases (admission-kit items) only */}
+              {/* View switcher — segmented control */}
               {ledgerData?.entries?.length > 0 && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-medium text-slate-500 uppercase">View:</span>
-                  <button onClick={() => setLedgerView('all')}
-                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'all' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                    All (Fees & Purchases)
-                  </button>
-                  <button onClick={() => setLedgerView('purchases')}
-                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'purchases' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                    Purchases Only (Dress / Tie / Belt / Books / Copy / Dairy)
-                  </button>
-                  <button onClick={() => setLedgerView('entries')}
-                    className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${ledgerView === 'entries' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                    All Entries (Edit / Delete)
-                  </button>
+                <div className="inline-flex flex-wrap gap-1 bg-slate-100 rounded-lg p-1">
+                  {([
+                    ['all', 'Monthly', 'Month-by-month fees & purchases'],
+                    ['summary', 'All Expenses', 'Every charge by category, paid/unpaid'],
+                    ['purchases', 'Purchases', 'Kit items: dress, books, copy, dairy…'],
+                    ['entries', 'Edit Entries', 'Edit / void / restore individual entries'],
+                  ] as const).map(([val, label, hint]) => (
+                    <button key={val} onClick={() => setLedgerView(val)} title={hint}
+                      className={`px-3 py-1.5 text-xs rounded-md font-medium transition ${ledgerView === val ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
 
@@ -1836,19 +2380,86 @@ export default function StudentProfilePage() {
               {/* Opening Balance form */}
               {showOpeningBalance && (
                 <form onSubmit={handleOpeningBalance} className="bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-purple-800">Set Previous Year Balance</h3>
-                  <p className="text-xs text-purple-600">Use this to carry forward unpaid balance from previous years (e.g. student is here 5 years but paid for only 2 years).</p>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                    <input type="number" placeholder="Previous balance amount (₹)" value={openingForm.amount} onChange={e => setOpeningForm({...openingForm, amount: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
-                    <select value={openingForm.year} onChange={e => setOpeningForm({...openingForm, year: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                      {['2020-2021', '2021-2022', '2022-2023', '2023-2024', '2024-2025', '2025-2026'].map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                    <input type="month" value={openingForm.month} onChange={e => setOpeningForm({...openingForm, month: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" placeholder="Month (optional)" />
+                  <h3 className="text-sm font-semibold text-purple-800">Previous Record — Balance & Payments</h3>
+                  <p className="text-xs text-purple-600">
+                    Backfill a student&apos;s history: total previous fees charged AND what was already paid back then.
+                    The net difference carries forward as their opening balance.
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+                    <label className="text-xs text-purple-700">
+                      Previous fees charged (₹)
+                      <input type="number" placeholder="e.g. 7800" value={openingForm.amount} onChange={e => setOpeningForm({...openingForm, amount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                    </label>
+                    <label className="text-xs text-purple-700">
+                      Already paid (₹)
+                      <input type="number" placeholder="0" value={openingForm.paidAmount} onChange={e => setOpeningForm({...openingForm, paidAmount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <label className="text-xs text-purple-700">
+                      Paid via
+                      <select value={openingForm.paymentMethod} onChange={e => setOpeningForm({...openingForm, paymentMethod: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                        {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-purple-700">
+                      Academic year
+                      <select value={openingForm.year} onChange={e => setOpeningForm({...openingForm, year: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                        {['2020-2021', '2021-2022', '2022-2023', '2023-2024', '2024-2025', '2025-2026'].map(y => <option key={y} value={y}>{y}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-purple-700">
+                      Month (optional)
+                      <input type="month" value={openingForm.month} onChange={e => setOpeningForm({...openingForm, month: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
                     <div className="flex gap-2">
-                      <button type="submit" className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Save</button>
+                      <button type="submit" disabled={chargeSaving} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50">{chargeSaving ? 'Saving…' : 'Save'}</button>
                       <button type="button" onClick={() => setShowOpeningBalance(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
                     </div>
                   </div>
+                  {(parseFloat(openingForm.amount) || 0) > 0 && (
+                    <p className="text-xs font-semibold text-purple-800">
+                      Net carried forward: {formatCurrency(Math.max(0, (parseFloat(openingForm.amount) || 0) - (parseFloat(openingForm.paidAmount) || 0)))}
+                      {(parseFloat(openingForm.paidAmount) || 0) > (parseFloat(openingForm.amount) || 0) &&
+                        <span className="text-green-700"> (advance of {formatCurrency((parseFloat(openingForm.paidAmount) || 0) - (parseFloat(openingForm.amount) || 0))})</span>}
+                    </p>
+                  )}
+
+                  {/* Existing previous records — with delete options */}
+                  {(() => {
+                    const all = ledgerData?.entries || [];
+                    const prevCharges = all.filter((e: any) => !e.voidedAt && e.category === 'PREVIOUS_BALANCE');
+                    const prevMonths = new Set(prevCharges.map((e: any) => e.month));
+                    const prevDeposits = all.filter((e: any) => !e.voidedAt && e.type === 'DEPOSIT' && prevMonths.has(e.month));
+                    const records = [...prevCharges, ...prevDeposits].sort((a: any, b: any) => a.month.localeCompare(b.month) || a.type.localeCompare(b.type));
+                    if (records.length === 0) return null;
+                    return (
+                      <div className="border-t border-purple-200 pt-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-purple-800">Existing previous records</p>
+                          <button type="button" onClick={() => removeAllPreviousRecords(records)}
+                            className="px-2.5 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 font-semibold">
+                            Remove all
+                          </button>
+                        </div>
+                        {records.map((e: any) => (
+                          <div key={e.id} className="flex items-center justify-between gap-2 bg-white border border-purple-100 rounded-lg px-3 py-1.5 text-xs">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`px-1.5 py-0.5 rounded font-semibold ${e.type === 'CHARGE' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                                {e.type === 'CHARGE' ? 'BALANCE' : 'DEPOSIT'}
+                              </span>
+                              <span className="text-slate-700 truncate">{e.description}</span>
+                              <span className="text-slate-400">{new Date(e.month + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={`font-bold ${e.type === 'CHARGE' ? 'text-orange-700' : 'text-green-700'}`}>{formatCurrency(e.amount)}</span>
+                              <button type="button" onClick={() => handleEntryDelete(e)}
+                                className="px-2 py-0.5 bg-red-50 text-red-600 rounded hover:bg-red-100">Remove</button>
+                            </div>
+                          </div>
+                        ))}
+                        <p className="text-[10px] text-purple-500">Removed entries are voided (recoverable from All Entries → Show voided). Admin can permanently delete them from there.</p>
+                      </div>
+                    );
+                  })()}
                 </form>
               )}
 
@@ -1864,7 +2475,7 @@ export default function StudentProfilePage() {
                     </select>
                     <input placeholder="Received by" value={depositForm.receivedBy} onChange={e => setDepositForm({...depositForm, receivedBy: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                     <div className="flex gap-2">
-                      <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">Save</button>
+                      <button type="submit" disabled={depositSaving} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">{depositSaving ? 'Saving…' : 'Save'}</button>
                       <button type="button" onClick={() => setShowDepositForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
                     </div>
                   </div>
@@ -1875,18 +2486,46 @@ export default function StudentProfilePage() {
               {showChargeForm && (
                 <form onSubmit={handleCharge} className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-3">
                   <h3 className="text-sm font-semibold text-orange-800">Add Charge</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                    <input type="month" value={chargeForm.month} onChange={e => setChargeForm({...chargeForm, month: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" placeholder="Month" />
-                    <select value={chargeForm.category} onChange={e => setChargeForm({...chargeForm, category: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                      {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'AD_HOC', 'PREVIOUS_BALANCE'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
-                    </select>
-                    <input placeholder="Description (optional)" value={chargeForm.description} onChange={e => setChargeForm({...chargeForm, description: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
-                    <input type="number" placeholder="Amount (₹)" value={chargeForm.amount} onChange={e => setChargeForm({...chargeForm, amount: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
-                    <div className="flex gap-2">
-                      <button type="submit" className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">Add</button>
-                      <button type="button" onClick={() => setShowChargeForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
-                    </div>
-                  </div>
+                  {(() => {
+                    const isFamily = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+                    return (
+                      <>
+                        {/* Shared fields */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <input type="month" value={chargeForm.month} onChange={e => setChargeForm({...chargeForm, month: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" placeholder="Month" />
+                          <select value={chargeForm.category} onChange={e => setChargeForm({...chargeForm, category: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                            {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'AD_HOC', 'PREVIOUS_BALANCE'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                          </select>
+                          <input placeholder="Description (optional)" value={chargeForm.description} onChange={e => setChargeForm({...chargeForm, description: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        </div>
+
+                        {isFamily ? (
+                          /* Per-child amounts — charge each sibling a different fee */
+                          <div className="space-y-2">
+                            <p className="text-xs text-orange-700 font-medium">Amount per child (leave blank to skip a child):</p>
+                            {ledgerData.siblings.map((sib: any) => (
+                              <div key={sib.id} className="flex items-center gap-3">
+                                <span className="text-sm text-slate-700 w-48 truncate">{sib.name} <span className="text-slate-400 text-xs">— {sib.class}</span></span>
+                                <input type="number" placeholder="₹ amount" value={chargePerStudent[sib.id] || ''}
+                                  onChange={e => setChargePerStudent({ ...chargePerStudent, [sib.id]: e.target.value })}
+                                  className="w-32 px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                              </div>
+                            ))}
+                            <div className="flex gap-2 pt-1">
+                              <button type="submit" disabled={chargeSaving} className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700 disabled:opacity-50">{chargeSaving ? 'Adding…' : 'Add to each child'}</button>
+                              <button type="button" onClick={() => setShowChargeForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-3">
+                            <input type="number" placeholder="Amount (₹)" value={chargeForm.amount} onChange={e => setChargeForm({...chargeForm, amount: e.target.value})} className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                            <button type="submit" disabled={chargeSaving} className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700 disabled:opacity-50">{chargeSaving ? 'Adding…' : 'Add'}</button>
+                            <button type="button" onClick={() => setShowChargeForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </form>
               )}
 
@@ -1970,9 +2609,25 @@ export default function StudentProfilePage() {
                         )}
                       </div>
 
-                      {/* Optional deposit */}
-                      <div className="bg-green-50 border border-green-200 rounded-xl p-3">
-                        <h4 className="text-xs font-semibold text-green-800 mb-2">Payment at Purchase (optional — leave blank to add to balance)</h4>
+                      {/* Also collect this month's fee in the same bill */}
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                        <h4 className="text-xs font-semibold text-blue-800 mb-2">Also collect (same bill)</h4>
+                        {kitMonthlyFee > 0 && !kitMonthlyCharged ? (
+                          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                            <input type="checkbox" checked={kitIncludeFee} onChange={e => setKitIncludeFee(e.target.checked)} />
+                            Monthly Fee — {new Date(currentMonth() + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                            <strong className="ml-1">{formatCurrency(kitMonthlyFee)}</strong>
+                          </label>
+                        ) : kitMonthlyCharged ? (
+                          <p className="text-xs text-slate-500">This month&apos;s fee is already on the ledger — it&apos;s included in &quot;previous dues&quot; below if unpaid.</p>
+                        ) : (
+                          <p className="text-xs text-slate-500">No monthly fee set for this class in the Annual Fee Plan.</p>
+                        )}
+                      </div>
+
+                      {/* Payment + live bill summary */}
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-3">
+                        <h4 className="text-xs font-semibold text-green-800">Payment at Purchase</h4>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                           <input type="number" placeholder="Paid amount (₹)" value={kitDeposit.amount}
                             onChange={e => setKitDeposit({ ...kitDeposit, amount: e.target.value })}
@@ -1985,13 +2640,44 @@ export default function StudentProfilePage() {
                             onChange={e => setKitDeposit({ ...kitDeposit, receivedBy: e.target.value })}
                             className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                         </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setKitDeposit({ ...kitDeposit, amount: String(kitTotalPayable) })}
+                            disabled={kitTotalPayable <= 0}
+                            className="px-3 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40">
+                            Pay in full ({formatCurrency(kitTotalPayable)})
+                          </button>
+                          {kitNewCharges > 0 && kitPrevDues > 0 && (
+                            <button type="button" onClick={() => setKitDeposit({ ...kitDeposit, amount: String(kitNewCharges) })}
+                              className="px-3 py-1.5 text-xs font-semibold bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
+                              Pay this bill only ({formatCurrency(kitNewCharges)})
+                            </button>
+                          )}
+                          <button type="button" onClick={() => setKitDeposit({ ...kitDeposit, amount: '' })}
+                            className="px-3 py-1.5 text-xs font-semibold bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300">
+                            No payment
+                          </button>
+                        </div>
+
+                        {/* Live bill summary */}
+                        <div className="bg-white rounded-lg border border-slate-200 p-3 text-sm space-y-1">
+                          <div className="flex justify-between text-slate-600"><span>Kit (net)</span><span>{formatCurrency(kitNetTotal)}</span></div>
+                          {kitFeeAmount > 0 && <div className="flex justify-between text-slate-600"><span>Monthly Fee</span><span>{formatCurrency(kitFeeAmount)}</span></div>}
+                          <div className="flex justify-between font-medium text-slate-800 border-t border-slate-100 pt-1"><span>New charges</span><span>{formatCurrency(kitNewCharges)}</span></div>
+                          {kitPrevDues > 0 && <div className="flex justify-between text-slate-600"><span>Previous dues</span><span>{formatCurrency(kitPrevDues)}</span></div>}
+                          <div className="flex justify-between font-semibold text-slate-900 border-t border-slate-200 pt-1"><span>Total payable</span><span>{formatCurrency(kitTotalPayable)}</span></div>
+                          <div className="flex justify-between text-green-700"><span>Paid now</span><span>{formatCurrency(kitPaidNow)}</span></div>
+                          <div className={`flex justify-between font-bold border-t border-slate-200 pt-1 ${kitBalanceAfter > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            <span>Balance after</span>
+                            <span>{formatCurrency(Math.max(0, kitBalanceAfter))} {kitBalanceAfter > 0 ? 'DUE' : 'CLEAR'}</span>
+                          </div>
+                        </div>
                       </div>
 
                       <div className="flex justify-end gap-2">
                         <button onClick={() => setShowKitForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
-                        <button onClick={handleKitSubmit} disabled={kitSubmitting || kitSelectedTotal <= 0}
+                        <button onClick={handleKitSubmit} disabled={kitSubmitting || kitNewCharges <= 0}
                           className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
-                          {kitSubmitting ? 'Saving...' : `Confirm & Print Receipt (${formatCurrency(kitNetTotal)})`}
+                          {kitSubmitting ? 'Saving...' : `Confirm & Print Receipt (${formatCurrency(kitNewCharges)})`}
                         </button>
                       </div>
                     </>
@@ -2038,6 +2724,7 @@ export default function StudentProfilePage() {
                           <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Balance</th>
                           <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Status</th>
                           <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Date / Sign</th>
+                          <th className="text-center px-4 py-3 text-sm font-medium text-slate-500">Pay</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -2049,12 +2736,12 @@ export default function StudentProfilePage() {
                           const rowTint = row.status === 'PAID' ? 'bg-green-50/50' : row.status === 'PARTIAL' ? 'bg-amber-50/40' : '';
 
                           return (
-                            <>{showYearHeader && (
-                              <tr key={`year-${year}`} className="bg-blue-50">
-                                <td colSpan={8} className="px-4 py-2 text-sm font-bold text-blue-700">Academic Year {year}</td>
+                            <Fragment key={row.month}>{showYearHeader && (
+                              <tr className="bg-blue-50">
+                                <td colSpan={9} className="px-4 py-2 text-sm font-bold text-blue-700">Academic Year {year}</td>
                               </tr>
                             )}
-                            <tr key={row.month} className={`hover:bg-slate-50 ${isPrevBalance ? 'bg-purple-50' : rowTint}`}>
+                            <tr className={`hover:bg-slate-50 ${isPrevBalance ? 'bg-purple-50' : rowTint}`}>
                               <td className="px-4 py-3 text-sm font-medium text-slate-900">
                                 {new Date(row.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                                 {isPrevBalance && <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">Prev. Balance</span>}
@@ -2109,7 +2796,62 @@ export default function StudentProfilePage() {
                                   ))}
                                 {(!row.depositDates?.length) && <span className="text-slate-300">—</span>}
                               </td>
-                            </tr></>
+                              <td className="px-4 py-3 text-center">
+                                {(() => {
+                                  const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0));
+                                  const isLocked = ledgerData?.feeLockMonth && row.month <= ledgerData.feeLockMonth;
+                                  if (isLocked) return <span className="text-slate-300 text-xs" title="Month is locked">🔒</span>;
+                                  if (monthDue <= 0) return <span className="text-green-500 text-xs">✓</span>;
+                                  return (
+                                    <button onClick={() => openInlineDeposit(row)}
+                                      title={`Collect ${formatCurrency(monthDue)} for this month`}
+                                      className="px-2.5 py-1 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                      + Pay
+                                    </button>
+                                  );
+                                })()}
+                              </td>
+                            </tr>
+                            {inlineDeposit && inlineDeposit.month === row.month && (() => {
+                              const dep = inlineDeposit;
+                              return (
+                              <tr key={`pay-${row.month}`} className="bg-green-50">
+                                <td colSpan={9} className="px-4 py-3">
+                                  <form onSubmit={saveInlineDeposit} className="flex items-end gap-3 flex-wrap">
+                                    <span className="text-sm font-semibold text-green-800 pb-2">
+                                      Deposit — {new Date(row.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                                    </span>
+                                    <label className="text-xs text-slate-600">
+                                      Amount (₹)
+                                      <input type="number" step="0.01" min="1" autoFocus required value={dep.amount}
+                                        onChange={ev => setInlineDeposit({ ...dep, amount: ev.target.value })}
+                                        className="mt-1 block w-32 px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                                    </label>
+                                    <label className="text-xs text-slate-600">
+                                      Method
+                                      <select value={dep.paymentMethod}
+                                        onChange={ev => setInlineDeposit({ ...dep, paymentMethod: ev.target.value })}
+                                        className="mt-1 block px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900">
+                                        {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                                      </select>
+                                    </label>
+                                    <label className="text-xs text-slate-600">
+                                      Received by
+                                      <input value={dep.receivedBy}
+                                        onChange={ev => setInlineDeposit({ ...dep, receivedBy: ev.target.value })}
+                                        className="mt-1 block w-36 px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                                    </label>
+                                    <button type="submit" disabled={inlineDepositSaving}
+                                      className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+                                      {inlineDepositSaving ? 'Saving…' : 'Save Deposit'}
+                                    </button>
+                                    <button type="button" onClick={() => setInlineDeposit(null)}
+                                      className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                                  </form>
+                                </td>
+                              </tr>
+                              );
+                            })()}</Fragment>
                           );
                         })}
                         {/* Totals row */}
@@ -2126,9 +2868,141 @@ export default function StudentProfilePage() {
                               : <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">{formatCurrency(ledgerData.currentBalance)} DUE</span>}
                           </td>
                           <td></td>
+                          <td></td>
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                );
+              })()}
+
+              {/* Expense Summary — every charge category rolled up: Charged / Paid / Due */}
+              {ledgerView === 'summary' && (() => {
+                const CAT_LABELS: Record<string, string> = {
+                  MONTHLY_FEE: 'Monthly Fee', ANNUAL: 'Annual Charge', ADMISSION: 'Admission',
+                  REGISTRATION: 'Registration', BOOK: 'Books', DRESS: 'Dress', COPY: 'Copy',
+                  DAIRY: 'Dairy', TIE_BELT: 'Tie / Belt', TRANSPORT: 'Transport', EXAM_FEE: 'Exam Fee',
+                  FINE: 'Fine', ID_CARD: 'ID Card', PREVIOUS_BALANCE: 'Previous Balance',
+                  DISCOUNT: 'Discount', AD_HOC: 'Other',
+                };
+                // Group non-voided CHARGE rows by category. paidAmount is FIFO-tracked
+                // per charge row, so paid/due per category are accurate.
+                const byCat = new Map<string, { charged: number; paid: number }>();
+                for (const e of (ledgerData?.entries || [])) {
+                  if (e.voidedAt || e.type !== 'CHARGE') continue;
+                  const key = e.category || 'AD_HOC';
+                  const cur = byCat.get(key) || { charged: 0, paid: 0 };
+                  cur.charged += e.amount;
+                  cur.paid += e.paidAmount || 0;
+                  byCat.set(key, cur);
+                }
+                const rows = Array.from(byCat.entries())
+                  .map(([cat, v]) => ({ cat, label: CAT_LABELS[cat] || cat.replace(/_/g, ' '), ...v, due: Math.max(0, v.charged - v.paid) }))
+                  .sort((a, b) => b.charged - a.charged);
+                const tot = rows.reduce((t, r) => ({ charged: t.charged + r.charged, paid: t.paid + r.paid, due: t.due + r.due }), { charged: 0, paid: 0, due: 0 });
+
+                if (rows.length === 0) {
+                  return <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-400">No charges recorded yet.</div>;
+                }
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <p className="text-sm text-slate-600">Total of every charge this student has been billed, grouped by type.</p>
+                      <button onClick={() => printExpenseSummary(rows, tot)}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800">
+                        <Printer className="h-3.5 w-3.5" /> Print Statement
+                      </button>
+                    </div>
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
+                          <tr>
+                            <th className="text-left px-4 py-3 font-medium">Category</th>
+                            <th className="text-right px-4 py-3 font-medium">Charged</th>
+                            <th className="text-right px-4 py-3 font-medium">Paid</th>
+                            <th className="text-right px-4 py-3 font-medium">Due</th>
+                            <th className="text-left px-4 py-3 font-medium w-40">Progress</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {rows.map(r => {
+                            const pct = r.charged > 0 ? Math.min(100, (r.paid / r.charged) * 100) : 0;
+                            return (
+                              <tr key={r.cat} className="hover:bg-slate-50">
+                                <td className="px-4 py-2.5 font-medium text-slate-900">{r.label}</td>
+                                <td className="px-4 py-2.5 text-right text-slate-700">{formatCurrency(r.charged)}</td>
+                                <td className="px-4 py-2.5 text-right text-green-600 font-medium">{formatCurrency(r.paid)}</td>
+                                <td className={`px-4 py-2.5 text-right font-semibold ${r.due > 0 ? 'text-red-600' : 'text-slate-400'}`}>{r.due > 0 ? formatCurrency(r.due) : '—'}</td>
+                                <td className="px-4 py-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex-1 bg-slate-100 rounded-full h-2">
+                                      <div className={`h-2 rounded-full ${pct >= 100 ? 'bg-green-500' : pct > 0 ? 'bg-amber-500' : 'bg-slate-300'}`} style={{ width: `${pct}%` }} />
+                                    </div>
+                                    <span className="text-xs text-slate-400 w-9 text-right">{Math.round(pct)}%</span>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-slate-100 border-t-2 border-slate-300 font-bold text-slate-900">
+                            <td className="px-4 py-3">TOTAL</td>
+                            <td className="px-4 py-3 text-right">{formatCurrency(tot.charged)}</td>
+                            <td className="px-4 py-3 text-right text-green-700">{formatCurrency(tot.paid)}</td>
+                            <td className={`px-4 py-3 text-right ${tot.due > 0 ? 'text-red-600' : 'text-green-600'}`}>{tot.due > 0 ? formatCurrency(tot.due) : 'ALL PAID'}</td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+
+                    {/* Itemised — every expense line in one place, paid or unpaid */}
+                    {(() => {
+                      const items = (ledgerData?.entries || [])
+                        .filter((e: any) => !e.voidedAt && e.type === 'CHARGE')
+                        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.month.localeCompare(b.month));
+                      if (items.length === 0) return null;
+                      return (
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-700 mb-2">All Expenses — itemised</h3>
+                          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 font-medium">Date</th>
+                                  <th className="text-left px-4 py-2.5 font-medium">Expense</th>
+                                  <th className="text-left px-4 py-2.5 font-medium">Category</th>
+                                  <th className="text-right px-4 py-2.5 font-medium">Amount</th>
+                                  <th className="text-right px-4 py-2.5 font-medium">Paid</th>
+                                  <th className="text-right px-4 py-2.5 font-medium">Due</th>
+                                  <th className="text-center px-4 py-2.5 font-medium">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {items.map((e: any) => {
+                                  const paid = e.paidAmount || 0;
+                                  const due = Math.max(0, e.amount - paid);
+                                  const st = due <= 0.005 ? 'PAID' : paid > 0.005 ? 'PARTIAL' : 'DUE';
+                                  const stColor = st === 'PAID' ? 'bg-green-100 text-green-700' : st === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700';
+                                  return (
+                                    <tr key={e.id} className="hover:bg-slate-50">
+                                      <td className="px-4 py-2 text-slate-500 whitespace-nowrap">{new Date(e.date).toLocaleDateString('en-IN')}</td>
+                                      <td className="px-4 py-2 text-slate-900">{e.description}</td>
+                                      <td className="px-4 py-2 text-xs text-slate-500">{(CAT_LABELS[e.category] || e.category || 'Other')}</td>
+                                      <td className="px-4 py-2 text-right text-slate-900">{formatCurrency(e.amount)}</td>
+                                      <td className="px-4 py-2 text-right text-green-600">{formatCurrency(paid)}</td>
+                                      <td className={`px-4 py-2 text-right font-medium ${due > 0 ? 'text-red-600' : 'text-slate-300'}`}>{due > 0 ? formatCurrency(due) : '—'}</td>
+                                      <td className="px-4 py-2 text-center"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${stColor}`}>{st}</span></td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
@@ -2198,62 +3072,139 @@ export default function StudentProfilePage() {
                       </div>
                     </div>
 
-                    {/* Detail table */}
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-                      <table className="w-full">
-                        <thead className="bg-slate-50 border-b border-slate-200">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Date &amp; Time</th>
-                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Item</th>
-                            <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Category</th>
-                            <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {purchases.map((p: any) => (
-                            <tr key={p.id} className="hover:bg-slate-50">
-                              <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
-                                {fmtDateTime(p.date)}
-                              </td>
-                              <td className="px-4 py-3 text-sm font-medium text-slate-900">{p.description}</td>
-                              <td className="px-4 py-3 text-sm">
-                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${CAT_COLORS[p.category] || 'bg-slate-100 text-slate-700'}`}>
-                                  {p.category.replace(/_/g, ' ')}
+                    {/* Purchase records — each kit transaction grouped (what was bought, when, paid) */}
+                    {(() => {
+                      // All non-voided entries that share a timestamp with a purchase
+                      // charge belong to the same purchase transaction (the kit route
+                      // stamps every row in one purchase with the same instant).
+                      const stamps = new Set(purchases.map((p: any) => new Date(p.date).getTime()));
+                      const groups = new Map<number, any[]>();
+                      for (const e of (ledgerData?.entries || [])) {
+                        if (e.voidedAt) continue;
+                        const t = new Date(e.date).getTime();
+                        if (!stamps.has(t)) continue;
+                        const list = groups.get(t) || [];
+                        list.push(e);
+                        groups.set(t, list);
+                      }
+                      const txns = Array.from(groups.entries())
+                        .sort((a, b) => b[0] - a[0])
+                        .map(([t, entries]) => {
+                          const items = entries.filter((e: any) => e.type === 'CHARGE' && e.amount > 0);
+                          const discount = entries.filter((e: any) => e.type === 'CHARGE' && e.amount < 0).reduce((s: number, e: any) => s + Math.abs(e.amount), 0);
+                          const dep = entries.find((e: any) => e.type === 'DEPOSIT');
+                          const paid = entries.filter((e: any) => e.type === 'DEPOSIT').reduce((s: number, e: any) => s + e.amount, 0);
+                          const gross = items.reduce((s: number, e: any) => s + e.amount, 0);
+                          return { t, date: entries[0].date, items, discount, paid, dep, net: gross - discount };
+                        });
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-slate-700">Purchase Records ({txns.length})</h3>
+                            {txns.length > 0 && (
+                              <button onClick={() => printPurchaseHistory(txns)}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800">
+                                <Printer className="h-3.5 w-3.5" /> Save / Print
+                              </button>
+                            )}
+                          </div>
+                          {txns.map(tx => (
+                            <div key={tx.t} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                              <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex-wrap">
+                                <span className="text-sm font-medium text-slate-700">{fmtDateTime(tx.date)}</span>
+                                <div className="flex items-center gap-3">
+                                  {tx.dep?.receiptNumber && <span className="text-xs text-slate-400">{tx.dep.receiptNumber}</span>}
+                                  {tx.dep && (
+                                    <button onClick={() => printDepositReceipt(tx.dep.id)}
+                                      className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 flex items-center gap-1">
+                                      <Printer className="h-3 w-3" /> Receipt
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="px-4 py-2 divide-y divide-slate-50">
+                                {tx.items.map((it: any) => (
+                                  <div key={it.id} className="flex items-center justify-between py-1.5 text-sm">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${CAT_COLORS[it.category] || 'bg-slate-100 text-slate-600'}`}>{it.category.replace(/_/g, ' ')}</span>
+                                      <span className="text-slate-700">{it.description}</span>
+                                    </div>
+                                    <span className="text-slate-900 font-medium">{formatCurrency(it.amount)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex justify-end gap-5 text-sm flex-wrap">
+                                {tx.discount > 0 && <span className="text-purple-700">Discount: <strong>-{formatCurrency(tx.discount)}</strong></span>}
+                                <span className="text-slate-700">Total: <strong>{formatCurrency(tx.net)}</strong></span>
+                                <span className="text-green-700">Paid: <strong>{formatCurrency(tx.paid)}</strong></span>
+                                <span className={tx.net - tx.paid > 0 ? 'text-red-600' : 'text-green-600'}>
+                                  {tx.net - tx.paid > 0 ? <>Due: <strong>{formatCurrency(tx.net - tx.paid)}</strong></> : <strong>Settled</strong>}
                                 </span>
-                              </td>
-                              <td className="px-4 py-3 text-sm font-semibold text-slate-900 text-right">
-                                {formatCurrency(p.amount)}
-                              </td>
-                            </tr>
+                              </div>
+                            </div>
                           ))}
-                          <tr className="bg-slate-100 border-t-2 border-slate-300">
-                            <td colSpan={3} className="px-4 py-3 text-sm font-bold text-slate-900">TOTAL ({purchases.length} items)</td>
-                            <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right">{formatCurrency(total)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
 
               {/* All entries view — editable */}
               {ledgerView === 'entries' && (() => {
+                const allEntries = ledgerData?.entries || [];
+                const voidable = allEntries.filter(isEntryVoidable);
+                const allSelected = voidable.length > 0 && voidable.every((e: any) => selectedEntries.has(e.id));
+                const selectedCount = allEntries.filter((e: any) => selectedEntries.has(e.id) && isEntryVoidable(e)).length;
+                const toggleSelectAll = () => {
+                  setSelectedEntries(() => allSelected ? new Set() : new Set(voidable.map((e: any) => e.id)));
+                };
+                // In family view, label which child each row belongs to
+                const isFamily = (ledgerData?.siblings?.length || 0) > 1;
+                const nameById = new Map<string, string>((ledgerData?.siblings || []).map((s: any) => [s.id, s.name]));
                 return (
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                   <div className="px-4 py-3 border-b border-slate-200 bg-amber-50 flex items-center justify-between flex-wrap gap-2">
                     <p className="text-xs text-amber-800">
-                      <strong>Edit mode:</strong> Delete = void (kept for audit, can be restored). Status uses persisted FIFO (oldest charges paid first).
+                      <strong>Edit mode:</strong> Delete = void (kept for audit, can be restored). Tick rows to void several at once.
+                      {ledgerData?.feeLockMonth && (
+                        <span className="ml-1 font-semibold">🔒 Months up to {ledgerData.feeLockMonth} are locked (read-only).</span>
+                      )}
                     </p>
-                    <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                      <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
-                      Show voided entries
-                    </label>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                        <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
+                        Show voided entries
+                      </label>
+                      <Link href={`/fee-reports/audit-log?studentId=${id}`}
+                        className="text-xs text-blue-600 hover:underline">Change history</Link>
+                    </div>
                   </div>
+
+                  {/* Bulk selection bar */}
+                  {selectedCount > 0 && (
+                    <div className="px-4 py-2.5 bg-red-50 border-b border-red-200 flex items-center justify-between flex-wrap gap-2">
+                      <span className="text-sm font-medium text-red-800">{selectedCount} selected</span>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setSelectedEntries(new Set())} disabled={bulkVoiding}
+                          className="px-3 py-1.5 text-xs bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 disabled:opacity-50">Clear</button>
+                        <button onClick={handleBulkVoid} disabled={bulkVoiding}
+                          className="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-1.5">
+                          {bulkVoiding && <span className="h-3 w-3 border-2 border-red-200 border-t-white rounded-full animate-spin" />}
+                          {bulkVoiding ? 'Voiding…' : 'Void selected'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                         <tr>
+                          <th className="px-3 py-2 text-center w-8">
+                            <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                              title="Select all voidable entries" disabled={voidable.length === 0} />
+                          </th>
+                          {isFamily && <th className="px-3 py-2 text-left">Student</th>}
                           <th className="px-3 py-2 text-left">Date</th>
                           <th className="px-3 py-2 text-left">Month</th>
                           <th className="px-3 py-2 text-left">Type</th>
@@ -2274,8 +3225,15 @@ export default function StudentProfilePage() {
                           const fullyPaid = isCharge && !isVoided && paid >= e.amount - 0.01;
                           const partial = isCharge && !isVoided && paid > 0 && !fullyPaid;
                           const rowTint = isVoided ? 'bg-slate-100/60 opacity-60' : fullyPaid ? 'bg-green-50/40' : partial ? 'bg-amber-50/30' : '';
+                          const voidable = isEntryVoidable(e);
                           return (
-                            <tr key={e.id} className={`hover:bg-slate-50 ${rowTint}`}>
+                            <tr key={e.id} className={`hover:bg-slate-50 ${rowTint} ${selectedEntries.has(e.id) ? 'bg-red-50/50' : ''}`}>
+                              <td className="px-3 py-2 text-center">
+                                {voidable
+                                  ? <input type="checkbox" checked={selectedEntries.has(e.id)} onChange={() => toggleEntrySelect(e.id)} />
+                                  : <span className="text-slate-300">—</span>}
+                              </td>
+                              {isFamily && <td className="px-3 py-2 text-slate-700 font-medium">{nameById.get(e.studentId) || '—'}</td>}
                               <td className="px-3 py-2 text-slate-700">{new Date(e.date).toLocaleDateString('en-IN')}</td>
                               <td className="px-3 py-2 text-slate-700">{e.month}</td>
                               <td className="px-3 py-2">
@@ -2292,8 +3250,24 @@ export default function StudentProfilePage() {
                                 {e.description}
                                 {isVoided && <div className="text-[10px] text-red-600 mt-0.5">Voided: {e.voidReason || 'no reason'}</div>}
                               </td>
-                              <td className={`px-3 py-2 text-right font-semibold ${isVoided ? 'text-slate-400 line-through' : fullyPaid ? 'text-green-700 line-through opacity-70' : 'text-slate-900'}`}>
-                                {formatCurrency(e.amount)}
+                              <td className={`px-3 py-2 text-right font-semibold ${isVoided ? 'text-slate-400 line-through' : fullyPaid ? 'text-green-700' : 'text-slate-900'}`}>
+                                {inlineAmount && inlineAmount.id === e.id ? (
+                                  <div className="flex items-center gap-1 justify-end">
+                                    <input type="number" step="0.01" autoFocus value={inlineAmount.value}
+                                      onChange={ev => setInlineAmount({ id: e.id, value: ev.target.value })}
+                                      onKeyDown={ev => { if (ev.key === 'Enter') saveInlineAmount(e); if (ev.key === 'Escape') setInlineAmount(null); }}
+                                      className="w-24 px-2 py-1 border border-blue-400 rounded text-right text-slate-900" />
+                                    <button onClick={() => saveInlineAmount(e)} disabled={inlineAmountSaving}
+                                      className="px-1.5 text-green-600 hover:text-green-800 disabled:opacity-40" title="Save">✓</button>
+                                    <button onClick={() => setInlineAmount(null)} className="px-1.5 text-slate-400 hover:text-slate-600" title="Cancel">✕</button>
+                                  </div>
+                                ) : voidable ? (
+                                  <button onClick={() => setInlineAmount({ id: e.id, value: String(e.amount) })}
+                                    className="underline decoration-dotted decoration-slate-300 underline-offset-2 hover:decoration-blue-500"
+                                    title="Click to correct the amount">
+                                    {formatCurrency(e.amount)}
+                                  </button>
+                                ) : formatCurrency(e.amount)}
                               </td>
                               <td className="px-3 py-2">
                                 {isVoided ? (
@@ -2312,29 +3286,59 @@ export default function StudentProfilePage() {
                               </td>
                               <td className="px-3 py-2 text-right text-slate-600">{formatCurrency(e.balanceAfter)}</td>
                               <td className="px-3 py-2 text-right">
-                                <div className="flex gap-1 justify-end flex-wrap">
-                                  {isVoided ? (
-                                    <button onClick={() => handleEntryRestore(e)}
-                                      className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Restore</button>
-                                  ) : (
-                                    <>
-                                      {!isCharge && (
-                                        <button onClick={() => printDepositReceipt(e.id)}
-                                          className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200">Print</button>
-                                      )}
-                                      <button onClick={() => setEditingEntry({ ...e, amount: String(e.amount) })}
-                                        className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Edit</button>
-                                      <button onClick={() => handleEntryDelete(e)}
-                                        className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">Void</button>
-                                    </>
-                                  )}
+                                <div className="flex gap-1 justify-end flex-wrap items-center">
+                                  {(() => {
+                                    if (busyEntryId === e.id) {
+                                      return (
+                                        <span className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400">
+                                          <span className="h-3 w-3 border-2 border-slate-300 border-t-slate-500 rounded-full animate-spin" /> Working…
+                                        </span>
+                                      );
+                                    }
+                                    const isLocked = ledgerData?.feeLockMonth && e.month <= ledgerData.feeLockMonth;
+                                    if (isLocked) {
+                                      return (
+                                        <>
+                                          {!isVoided && !isCharge && (
+                                            <button onClick={() => printDepositReceipt(e.id)}
+                                              className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200">Print</button>
+                                          )}
+                                          <span className="px-2 py-1 text-xs bg-slate-100 text-slate-500 rounded"
+                                            title={`Locked — months up to ${ledgerData.feeLockMonth} are read-only (Settings → Annual Fee Plan)`}>
+                                            🔒 Locked
+                                          </span>
+                                        </>
+                                      );
+                                    }
+                                    return isVoided ? (
+                                      <>
+                                        <button onClick={() => handleEntryRestore(e)}
+                                          className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Restore</button>
+                                        {authUser?.role === 'ADMIN' && (
+                                          <button onClick={() => handleEntryHardDelete(e)}
+                                            className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700">Delete forever</button>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <>
+                                        {!isCharge && (
+                                          <button onClick={() => printDepositReceipt(e.id)}
+                                            className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200">Print</button>
+                                        )}
+                                        <button onClick={() => setEditingEntry({ ...e, amount: String(e.amount) })}
+                                          className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Edit</button>
+                                        <button onClick={() => handleEntryDelete(e)}
+                                          className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">Void</button>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               </td>
                             </tr>
                           );
                         })}
                         {(!ledgerData?.entries || ledgerData.entries.length === 0) && (
-                          <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400 text-sm">No entries yet.</td></tr>
+                          <tr><td colSpan={isFamily ? 12 : 11} className="px-3 py-6 text-center text-slate-400 text-sm">No entries yet.</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -2359,6 +3363,7 @@ export default function StudentProfilePage() {
                           className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
                           <option value="CHARGE">CHARGE</option>
                           <option value="DEPOSIT">DEPOSIT</option>
+                          <option value="DISCOUNT">DISCOUNT</option>
                         </select>
                       </label>
                       <label className="text-xs text-slate-600">
@@ -2413,6 +3418,13 @@ export default function StudentProfilePage() {
                           </label>
                         </>
                       )}
+                      <label className="text-xs text-slate-600 col-span-2">
+                        Reason for change
+                        <input value={editingEntry._reason || ''}
+                          onChange={ev => setEditingEntry({ ...editingEntry, _reason: ev.target.value })}
+                          placeholder="e.g. Wrong amount entered, correcting month…"
+                          className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                      </label>
                     </div>
                     <div className="flex justify-end gap-2 pt-2">
                       <button type="button" onClick={() => setEditingEntry(null)}

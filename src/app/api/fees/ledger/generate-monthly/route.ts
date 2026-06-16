@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'No classes have a monthly fee set in the fee plan' }, { status: 400 });
   }
 
-  // Pick which students to charge — never charge soft-deleted (deactivated) students
-  const studentWhere: any = { user: { isActive: true } };
+  // Pick which students to charge — never charge soft-deleted (deactivated)
+  // students or students marked fee-exempt
+  const studentWhere: any = { user: { isActive: true }, feeExempt: false };
   if (classId) studentWhere.classId = classId;
   if (sectionId) studentWhere.sectionId = sectionId;
 
@@ -58,11 +59,20 @@ export async function POST(request: NextRequest) {
   const safeDate = isNaN(entryDate.getTime()) ? new Date() : entryDate;
   const monthLabel = new Date(month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
-  let charged = 0;
   let skipped = 0;
-  let totalAmount = 0;
   const skippedNoFee: string[] = [];
 
+  // One query for all students already charged this month (instead of N findFirsts)
+  const existingRows = await prisma.feeLedger.findMany({
+    where: {
+      studentId: { in: students.map(s => s.id) },
+      month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null,
+    },
+    select: { studentId: true },
+  });
+  const alreadyCharged = new Set(existingRows.map(r => r.studentId));
+
+  const toCharge: { id: string; amount: number }[] = [];
   for (const s of students) {
     const amount = monthlyFeeByClass.get(s.classId);
     if (!amount) {
@@ -70,33 +80,34 @@ export async function POST(request: NextRequest) {
       skippedNoFee.push(`${s.user.firstName} ${s.user.lastName}`);
       continue;
     }
-
-    const existing = await prisma.feeLedger.findFirst({
-      where: { studentId: s.id, month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null },
-      select: { id: true },
-    });
-    if (existing) {
+    if (alreadyCharged.has(s.id)) {
       skipped++;
       continue;
     }
+    toCharge.push({ id: s.id, amount });
+  }
 
-    await prisma.feeLedger.create({
-      data: {
-        studentId: s.id,
+  // One insert for all new charges, then recompute each affected student
+  if (toCharge.length > 0) {
+    await prisma.feeLedger.createMany({
+      data: toCharge.map(t => ({
+        studentId: t.id,
         month,
         type: 'CHARGE',
         category: 'MONTHLY_FEE',
         description: `Monthly Fee - ${monthLabel}`,
-        amount,
+        amount: t.amount,
         balanceAfter: 0,
         date: safeDate,
-      },
+      })),
     });
-    await recomputeStudentLedger(s.id);
-
-    charged++;
-    totalAmount += amount;
+    for (const t of toCharge) {
+      await recomputeStudentLedger(t.id);
+    }
   }
+
+  const charged = toCharge.length;
+  const totalAmount = toCharge.reduce((s, t) => s + t.amount, 0);
 
   return Response.json({
     month,

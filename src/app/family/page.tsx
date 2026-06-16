@@ -4,17 +4,22 @@ import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
-import { Plus, UsersRound, ChevronRight } from 'lucide-react';
+import { useFeedback } from '@/components/ui/feedback';
+import { Plus, UsersRound, ChevronRight, Search, UserPlus, Link2 } from 'lucide-react';
 
 const SIBLING_DISCOUNT_RATE = 0.05; // 5%
 
 export default function FamilyPage() {
+  const { toast } = useFeedback();
   const [families, setFamilies] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [selectedFamily, setSelectedFamily] = useState<any>(null);
   const [form, setForm] = useState({ name: '', studentIds: [] as string[] });
+  const [pickerSearch, setPickerSearch] = useState('');   // Create Family search
+  const [addSearch, setAddSearch] = useState('');          // Add-to-family search
+  const [adding, setAdding] = useState(false);
 
   // Payment wizard
   const [payStep, setPayStep] = useState(0);
@@ -42,9 +47,29 @@ export default function FamilyPage() {
     setFamilies(r.data);
   };
 
+  // Connect an already-enrolled student into this family (case: both in school)
+  const addStudentToFamily = async (familyId: string, studentId: string) => {
+    setAdding(true);
+    try {
+      await api.put(`/families/${familyId}`, { studentId });
+      toast('success', 'Sibling connected to family');
+      setAddSearch('');
+      await loadFamily(familyId);
+      const r = await api.get('/families');
+      setFamilies(r.data);
+      const sr = await api.get('/students');
+      setStudents(sr.data);
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to connect sibling');
+    } finally {
+      setAdding(false);
+    }
+  };
+
   const loadFamily = async (id: string) => {
     const r = await api.get(`/families/${id}`);
     setSelectedFamily(r.data);
+    setAddSearch('');
     setPayStep(0);
     setPaySelectedStudents([]);
     setPayAmounts({});
@@ -109,17 +134,30 @@ export default function FamilyPage() {
             <form onSubmit={createFamily} className="space-y-4">
               <input placeholder="Family Name (e.g. Patel Family)" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Select Siblings</label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-                  {students.map((s: any) => (
-                    <label key={s.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded text-sm">
-                      <input type="checkbox" checked={form.studentIds.includes(s.id)} onChange={e => {
-                        setForm({ ...form, studentIds: e.target.checked ? [...form.studentIds, s.id] : form.studentIds.filter(id => id !== s.id) });
-                      }} />
-                      {s.user.firstName} {s.user.lastName} ({s.admissionNo})
-                    </label>
-                  ))}
+                <label className="block text-sm font-medium text-slate-700 mb-2">Select Siblings (already enrolled)</label>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input placeholder="Search by name or admission no…" value={pickerSearch} onChange={e => setPickerSearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                  {students
+                    .filter((s: any) => {
+                      const q = pickerSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${s.user.firstName} ${s.user.lastName} ${s.admissionNo}`.toLowerCase().includes(q);
+                    })
+                    .map((s: any) => (
+                      <label key={s.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded text-sm">
+                        <input type="checkbox" checked={form.studentIds.includes(s.id)} onChange={e => {
+                          setForm({ ...form, studentIds: e.target.checked ? [...form.studentIds, s.id] : form.studentIds.filter(id => id !== s.id) });
+                        }} />
+                        {s.user.firstName} {s.user.lastName} ({s.admissionNo})
+                        {s.familyId && <span className="text-[10px] text-amber-600">(in a family)</span>}
+                      </label>
+                    ))}
+                </div>
+                {form.studentIds.length > 0 && <p className="text-xs text-slate-500 mt-1">{form.studentIds.length} selected</p>}
               </div>
               <div className="flex gap-2">
                 <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Create</button>
@@ -180,6 +218,42 @@ export default function FamilyPage() {
                         </p>
                       </div>
                     ))}
+
+                    {/* Connect another already-enrolled sibling */}
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-sm font-medium text-slate-700 mb-2 flex items-center gap-2"><Link2 className="h-4 w-4 text-blue-500" /> Connect a sibling (already in school)</p>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                        <input placeholder="Search student by name or admission no…" value={addSearch} onChange={e => setAddSearch(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      </div>
+                      {addSearch.trim() && (
+                        <div className="mt-2 space-y-1 max-h-56 overflow-y-auto">
+                          {(() => {
+                            const inFamily = new Set(selectedFamily.students.map((s: any) => s.id));
+                            const q = addSearch.trim().toLowerCase();
+                            const matches = students.filter((s: any) =>
+                              !inFamily.has(s.id) &&
+                              `${s.user.firstName} ${s.user.lastName} ${s.admissionNo}`.toLowerCase().includes(q)
+                            ).slice(0, 8);
+                            if (matches.length === 0) return <p className="text-xs text-slate-400">No matching students.</p>;
+                            return matches.map((s: any) => (
+                              <div key={s.id} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg p-2.5">
+                                <div>
+                                  <span className="text-sm font-medium text-slate-900">{s.user.firstName} {s.user.lastName}</span>
+                                  <span className="text-xs text-slate-500 ml-2">{s.admissionNo} · {s.class?.name}</span>
+                                  {s.familyId && <span className="text-[10px] text-amber-600 ml-2">(moving from another family)</span>}
+                                </div>
+                                <button onClick={() => addStudentToFamily(selectedFamily.id, s.id)} disabled={adding}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                                  <UserPlus className="h-3 w-3" /> Connect
+                                </button>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 

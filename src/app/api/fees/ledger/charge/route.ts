@@ -13,6 +13,21 @@ export async function POST(request: NextRequest) {
   if ('error' in v) return v.error;
   const { studentIds, month, category, description, amount } = v.data;
 
+  // Optional per-student amounts (family view: charge each child a different fee).
+  // When present, ONLY students with their own amount are charged — a child left
+  // blank (fee 0) is skipped, NOT charged the flat fallback amount.
+  const perStudent: Record<string, any> | null =
+    body.perStudentAmounts && typeof body.perStudentAmounts === 'object' ? body.perStudentAmounts : null;
+  const amountFor = (sid: string): number => {
+    if (perStudent) {
+      const v = perStudent[sid];
+      if (v == null || v === '') return 0; // blank child → skip
+      const n = parseFloat(String(v));
+      return isNaN(n) ? 0 : n;
+    }
+    return amount;
+  };
+
   const entryDescription = description || (category || 'CHARGE').replace(/_/g, ' ');
 
   // Validate students exist
@@ -24,9 +39,28 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'One or more students not found' }, { status: 404 });
   }
 
+  // Monthly fee is once-per-month and also auto-accrued — never add a second one
+  // for a month that already has it. Skip those students; error if all are dups.
+  let targetIds = studentIds as string[];
+  if (category === 'MONTHLY_FEE') {
+    const existing = await prisma.feeLedger.findMany({
+      where: { studentId: { in: targetIds }, month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null },
+      select: { studentId: true },
+    });
+    const have = new Set(existing.map(e => e.studentId));
+    targetIds = targetIds.filter(sid => !have.has(sid));
+    if (targetIds.length === 0) {
+      const label = new Date(month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+      return Response.json({ error: `A monthly fee for ${label} already exists — it's added automatically, no need to add it again.` }, { status: 409 });
+    }
+  }
+
   // Create charge entries for each student. balanceAfter is filled in after.
   const entries = [];
-  for (const studentId of studentIds) {
+  const affected: string[] = [];
+  for (const studentId of targetIds) {
+    const amt = amountFor(studentId);
+    if (!(amt > 0)) continue; // skip students with no amount in per-student mode
     const entryDate = new Date(month + '-01T00:00:00Z');
     const entry = await prisma.feeLedger.create({
       data: {
@@ -35,7 +69,7 @@ export async function POST(request: NextRequest) {
         type: 'CHARGE',
         category,
         description: entryDescription,
-        amount,
+        amount: amt,
         balanceAfter: 0,
         date: isNaN(entryDate.getTime()) ? new Date() : entryDate,
       },
@@ -44,10 +78,15 @@ export async function POST(request: NextRequest) {
       },
     });
     entries.push(entry);
+    affected.push(studentId);
+  }
+
+  if (entries.length === 0) {
+    return Response.json({ error: 'No amounts entered' }, { status: 400 });
   }
 
   // Recompute balances + paidAmount for each affected student
-  for (const studentId of studentIds) {
+  for (const studentId of affected) {
     await recomputeStudentLedger(studentId);
   }
 

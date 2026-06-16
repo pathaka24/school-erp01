@@ -14,34 +14,47 @@ export async function GET(request: NextRequest) {
   // New paginated callers pass `?limit=50&offset=0`.
   const wantsPaginated = searchParams.has('limit') || searchParams.has('offset') || searchParams.has('page');
 
-  // Use isActive (existing field) to hide soft-deleted students.
-  // The DELETE endpoint sets both isActive=false and deletedAt=now;
-  // once `prisma generate` is run we could also filter on deletedAt directly.
+  // status=active (default) hides soft-deleted students; status=left shows
+  // only them (the "Left Students" view); status=all shows everyone.
+  const status = searchParams.get('status') || 'active';
   const where: any = {
-    user: { isActive: true },
+    user: status === 'all' ? {} : { isActive: status !== 'left' },
   };
   if (classId) where.classId = classId;
   if (sectionId) where.sectionId = sectionId;
   if (search) {
-    where.user = {
-      ...where.user,
-      OR: [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-      ],
-    };
+    // Match first name, last name, or admission number (kept as an AND alongside
+    // the status/user filter above so active/left filtering still applies)
+    where.OR = [
+      { user: { firstName: { contains: search, mode: 'insensitive' } } },
+      { user: { lastName: { contains: search, mode: 'insensitive' } } },
+      { admissionNo: { contains: search, mode: 'insensitive' } },
+    ];
   }
 
   if (!wantsPaginated) {
     const students = await prisma.student.findMany({
       where,
       include: {
-        user: { select: { id: true, email: true, firstName: true, lastName: true, phone: true, avatar: true } },
+        user: { select: { id: true, email: true, firstName: true, lastName: true, phone: true, avatar: true, deletedAt: true } },
         class: { select: { id: true, name: true } },
         section: { select: { id: true, name: true } },
       },
       orderBy: { user: { firstName: 'asc' } },
     });
+
+    // Left-students view also needs each student's outstanding balance so
+    // dues can be chased after they leave
+    if (status === 'left' && students.length > 0) {
+      const latest = await prisma.feeLedger.findMany({
+        where: { studentId: { in: students.map(s => s.id) }, voidedAt: null },
+        orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+        distinct: ['studentId'],
+        select: { studentId: true, balanceAfter: true },
+      });
+      const balanceMap = new Map(latest.map(e => [e.studentId, e.balanceAfter]));
+      return Response.json(students.map(s => ({ ...s, currentBalance: balanceMap.get(s.id) ?? 0 })));
+    }
     return Response.json(students);
   }
 

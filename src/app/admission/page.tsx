@@ -69,6 +69,9 @@ export default function AdmissionPage() {
         if (r.data.feePlan) setFeePlanClasses(r.data.feePlan);
       }),
     ]);
+    // Pre-link a sibling when arriving from a student's profile (?sibling=ADM-...)
+    const sib = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('sibling') : null;
+    if (sib) { setSiblingSearch(sib); setSiblingLinked(true); }
   }, []);
 
   const u = (field: string, value: string) => {

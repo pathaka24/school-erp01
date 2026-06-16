@@ -43,6 +43,7 @@ const adminMenu = [
   { label: 'Grades', href: '/grades', icon: Award, scope: 'grades' },
   { label: 'Fees', href: '/fees', icon: CreditCard, scope: 'fees' },
   { label: 'Register Entry', href: '/fees/register', icon: BookOpen, scope: 'fees' },
+  { label: 'Dues / Late Payers', href: '/fees/dues', icon: AlertTriangle, scope: 'fees' },
   { label: 'Finance', href: '/finance', icon: IndianRupee, scope: 'finance' },
   { label: 'Store', href: '/store', icon: ShoppingBag, scope: 'store' },
   { label: 'Family', href: '/family', icon: UsersRound, scope: 'family' },

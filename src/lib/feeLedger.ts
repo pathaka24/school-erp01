@@ -147,7 +147,9 @@ export async function restoreStudentLedger(
   return { restored: archived.length, currentBalance: balance };
 }
 
-// Write an audit row for a ledger entry change.
+// Write an audit row for a ledger entry change. Pass `db` to write inside an
+// open transaction so the change and its audit row commit (or roll back)
+// together — an unaudited mutation should never survive an audit failure.
 export async function writeFeeLedgerAudit(args: {
   entryId: string;
   studentId: string;
@@ -157,8 +159,8 @@ export async function writeFeeLedgerAudit(args: {
   userId?: string;
   userName?: string;
   reason?: string;
-}) {
-  await prisma.feeLedgerAudit.create({
+}, db: Pick<typeof prisma, 'feeLedgerAudit'> = prisma) {
+  await db.feeLedgerAudit.create({
     data: {
       entryId: args.entryId,
       studentId: args.studentId,
@@ -170,4 +172,21 @@ export async function writeFeeLedgerAudit(args: {
       reason: args.reason || null,
     },
   });
+}
+
+// Period lock: entries whose month is <= the configured lock month are
+// read-only — no edit, void, restore, or hard delete. The lock is stored in
+// SchoolSettings under 'feeLockMonth' (YYYY-MM) and managed from
+// Settings → Annual Fee Plan. Returns null when no valid lock is set.
+export async function getFeeLockMonth(): Promise<string | null> {
+  const s = await prisma.schoolSettings.findUnique({ where: { key: 'feeLockMonth' } });
+  if (!s) return null;
+  let v: any = s.value;
+  try { v = JSON.parse(s.value); } catch {}
+  return typeof v === 'string' && /^\d{4}-\d{2}$/.test(v) ? v : null;
+}
+
+// YYYY-MM strings compare correctly as plain strings.
+export function isMonthLocked(month: string, lockMonth: string | null): boolean {
+  return !!lockMonth && month <= lockMonth;
 }

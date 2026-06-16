@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
+import { useAuthStore } from '@/lib/store';
+import { useFeedback } from '@/components/ui/feedback';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { BookOpen, Save, RefreshCw } from 'lucide-react';
+import { BookOpen, Save, RefreshCw, CheckCheck } from 'lucide-react';
 
 const PAYMENT_METHODS = ['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'];
 const CHARGE_CATEGORIES = ['AD_HOC', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'ANNUAL', 'FINE', 'ID_CARD', 'EXAM_FEE'];
@@ -19,6 +21,7 @@ type Row = {
   currentBalance: number;
   monthlyFeeEntryId: string | null;
   monthlyFeeAmount: number | null;
+  paidThisMonth: number; // sum of existing (non-voided) deposits in the month
   // Form inputs
   monthlyFeeInput: string;
   otherCategory: string;
@@ -31,6 +34,9 @@ type Row = {
 };
 
 export default function RegisterEntryPage() {
+  const authUser = useAuthStore(s => s.user);
+  const actorName = authUser ? `${authUser.firstName} ${authUser.lastName}`.trim() : '';
+  const { toast } = useFeedback();
   const [classes, setClasses] = useState<any[]>([]);
   const [classId, setClassId] = useState('');
   const [sectionId, setSectionId] = useState('');
@@ -68,6 +74,7 @@ export default function RegisterEntryPage() {
         currentBalance: s.currentBalance,
         monthlyFeeEntryId: s.monthlyFeeEntryId,
         monthlyFeeAmount: s.monthlyFeeAmount,
+        paidThisMonth: (s.deposits || []).reduce((t: number, d: any) => t + (d.amount || 0), 0),
         // Pre-fill monthly fee input with class amount only if no entry exists yet
         monthlyFeeInput: s.monthlyFeeEntryId ? '' : (data.monthlyFee ? String(data.monthlyFee) : ''),
         otherCategory: 'AD_HOC',
@@ -75,12 +82,12 @@ export default function RegisterEntryPage() {
         otherAmount: '',
         depositAmount: '',
         paymentMethod: 'CASH',
-        receivedBy: '',
+        receivedBy: actorName,
         receiptNumber: '',
       }));
       setRows(newRows);
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to load students');
+      toast('error', err.response?.data?.error || 'Failed to load students');
     } finally {
       setLoading(false);
     }
@@ -92,10 +99,33 @@ export default function RegisterEntryPage() {
 
   const fillMonthlyFeeAll = () => {
     if (!classMonthlyFee) {
-      alert('Class monthly fee not set in Annual Fee Plan');
+      toast('error', 'Class monthly fee not set in Annual Fee Plan');
       return;
     }
     setRows(rs => rs.map(r => r.monthlyFeeEntryId ? r : { ...r, monthlyFeeInput: String(classMonthlyFee) }));
+  };
+
+  // The month's fee for a row: already-charged amount, else the input, else the class fee
+  const feeFor = (r: Row) =>
+    r.monthlyFeeEntryId ? (r.monthlyFeeAmount || 0) : (parseFloat(r.monthlyFeeInput) || classMonthlyFee || 0);
+
+  // Everything the student would owe after this save: existing balance + charges being entered now
+  const dueAllFor = (r: Row) => {
+    const newCharges = (r.monthlyFeeEntryId ? 0 : parseFloat(r.monthlyFeeInput) || 0) + (parseFloat(r.otherAmount) || 0);
+    return Math.max(0, r.currentBalance + newCharges);
+  };
+
+  // One-click "mark paid": deposit = this month's fee for every row that hasn't paid yet
+  const markAllPaidFee = () => {
+    const updated = rows.map(r => {
+      const fee = feeFor(r);
+      if (fee <= 0 || r.paidThisMonth > 0 || r.depositAmount) return r;
+      return { ...r, depositAmount: String(fee) };
+    });
+    const marked = updated.filter((r, i) => r !== rows[i]).length;
+    setRows(updated);
+    toast(marked > 0 ? 'success' : 'info',
+      marked > 0 ? `Deposit filled for ${marked} unpaid students` : 'Everyone already has a deposit this month');
   };
 
   const totals = useMemo(() => {
@@ -129,17 +159,18 @@ export default function RegisterEntryPage() {
         .filter(Boolean),
     };
     if (payload.rows.length === 0) {
-      alert('No values entered. Fill at least one row before saving.');
+      toast('error', 'No values entered. Fill at least one row before saving.');
       return;
     }
     setSaving(true);
     try {
       const { data } = await api.post('/fees/ledger/batch-entry', payload);
       setResult(data);
+      toast('success', `Saved — ${data.chargesCreated} charges, ${data.depositsCreated} deposits`);
       // Reload to reflect new ledger state
       await load();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to save');
+      toast('error', err.response?.data?.error || 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -192,10 +223,15 @@ export default function RegisterEntryPage() {
                 {loading ? 'Loading...' : 'Load Students'}
               </button>
             </div>
-            <div className="flex items-end">
+            <div className="flex items-end gap-2">
               <button onClick={fillMonthlyFeeAll} disabled={rows.length === 0 || !classMonthlyFee}
-                className="w-full px-4 py-2 bg-amber-100 text-amber-800 rounded-lg text-sm hover:bg-amber-200 disabled:opacity-50">
-                Fill Monthly Fee ({formatCurrency(classMonthlyFee)})
+                className="flex-1 px-3 py-2 bg-amber-100 text-amber-800 rounded-lg text-sm hover:bg-amber-200 disabled:opacity-50">
+                Fill Fees ({formatCurrency(classMonthlyFee)})
+              </button>
+              <button onClick={markAllPaidFee} disabled={rows.length === 0}
+                title="Fill the deposit column with this month's fee for every student who hasn't paid yet"
+                className="flex-1 px-3 py-2 bg-green-100 text-green-800 rounded-lg text-sm hover:bg-green-200 disabled:opacity-50 flex items-center justify-center gap-1">
+                <CheckCheck className="h-4 w-4" /> Mark All Paid
               </button>
             </div>
           </div>
@@ -238,6 +274,7 @@ export default function RegisterEntryPage() {
                       <th className="px-2 py-2 text-left">Roll</th>
                       <th className="px-2 py-2 text-left">Name</th>
                       <th className="px-2 py-2 text-right">Prev Bal</th>
+                      <th className="px-2 py-2 text-center w-20">Paid</th>
                       <th className="px-2 py-2 text-right w-28">Monthly Fee</th>
                       <th className="px-2 py-2 text-left w-32">Other Cat</th>
                       <th className="px-2 py-2 text-left w-40">Other Desc</th>
@@ -257,6 +294,16 @@ export default function RegisterEntryPage() {
                         </td>
                         <td className={`px-2 py-1.5 text-right font-semibold ${r.currentBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
                           {formatCurrency(r.currentBalance)}
+                        </td>
+                        <td className="px-2 py-1.5 text-center">
+                          {r.paidThisMonth > 0 ? (
+                            <span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-semibold"
+                              title={`Already deposited ${formatCurrency(r.paidThisMonth)} this month`}>
+                              ✓ {formatCurrency(r.paidThisMonth)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 text-[10px]">—</span>
+                          )}
                         </td>
                         <td className="px-2 py-1.5">
                           {r.monthlyFeeEntryId ? (
@@ -290,6 +337,22 @@ export default function RegisterEntryPage() {
                           <input type="number" value={r.depositAmount}
                             onChange={e => updateRow(i, { depositAmount: e.target.value })}
                             className="w-full px-2 py-1 border border-slate-300 rounded text-right text-slate-900" />
+                          <div className="flex gap-1 mt-0.5 justify-end">
+                            <button type="button" tabIndex={-1}
+                              onClick={() => updateRow(i, { depositAmount: String(feeFor(r) || '') })}
+                              disabled={feeFor(r) <= 0}
+                              title={`Fill this month's fee (${formatCurrency(feeFor(r))})`}
+                              className="px-1.5 py-0.5 text-[10px] bg-green-50 text-green-700 rounded hover:bg-green-100 disabled:opacity-40">
+                              Fee
+                            </button>
+                            <button type="button" tabIndex={-1}
+                              onClick={() => updateRow(i, { depositAmount: String(dueAllFor(r) || '') })}
+                              disabled={dueAllFor(r) <= 0}
+                              title={`Fill all dues incl. previous balance (${formatCurrency(dueAllFor(r))})`}
+                              className="px-1.5 py-0.5 text-[10px] bg-blue-50 text-blue-700 rounded hover:bg-blue-100 disabled:opacity-40">
+                              All dues
+                            </button>
+                          </div>
                         </td>
                         <td className="px-2 py-1.5">
                           <select value={r.paymentMethod}

@@ -30,6 +30,53 @@ export default function FeesPage() {
   const [monthlyGenSubmitting, setMonthlyGenSubmitting] = useState(false);
   const [monthlyGenResult, setMonthlyGenResult] = useState<any>(null);
 
+  // Annual / one-time charges (Annual, Books, Dress…) applied to a whole class
+  const [showAnnual, setShowAnnual] = useState(false);
+  const [annualClassId, setAnnualClassId] = useState('');
+  const [annualSectionId, setAnnualSectionId] = useState('');
+  const [annualMonth, setAnnualMonth] = useState((() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })());
+  const [annualCharges, setAnnualCharges] = useState<{ selected: boolean; category: string; description: string; amount: string }[]>([]);
+  const [annualLoading, setAnnualLoading] = useState(false);
+  const [annualSubmitting, setAnnualSubmitting] = useState(false);
+  const [annualResult, setAnnualResult] = useState<any>(null);
+
+  const openAnnual = () => {
+    setAnnualResult(null);
+    setAnnualClassId('');
+    setAnnualSectionId('');
+    setAnnualCharges([]);
+    setShowAnnual(true);
+  };
+
+  // When a class is picked, pull its charges from the Annual Fee Plan
+  const loadAnnualCharges = async (classId: string) => {
+    setAnnualClassId(classId);
+    setAnnualSectionId('');
+    setAnnualCharges([]);
+    setAnnualResult(null);
+    if (!classId) return;
+    setAnnualLoading(true);
+    try {
+      const { data } = await api.get('/settings/fee-plan');
+      const plan = (data?.classes || []).find((c: any) => c.classId === classId);
+      const charges = (plan?.charges || []).map((c: any) => ({
+        selected: parseFloat(c.amount) > 0,
+        category: c.category,
+        description: c.description || c.category,
+        amount: String(c.amount ?? ''),
+      }));
+      setAnnualCharges(charges);
+    } catch {
+      setAnnualCharges([]);
+    } finally {
+      setAnnualLoading(false);
+    }
+  };
+
+  const annualSelectedTotal = annualCharges
+    .filter(c => c.selected)
+    .reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+
   // Fee structure form
   const [form, setForm] = useState({
     name: '', classId: '', feeType: 'TUITION', amount: '', frequency: 'MONTHLY',
@@ -454,6 +501,9 @@ export default function FeesPage() {
               <div className="flex gap-2">
                 <Button onClick={() => { setMonthlyGenResult(null); setShowMonthlyGen(true); }} variant="outline">
                   <CalendarPlus className="h-4 w-4" /> Generate Monthly Fees
+                </Button>
+                <Button onClick={openAnnual} variant="outline">
+                  <BookOpen className="h-4 w-4" /> Apply Annual Charges
                 </Button>
                 <Button onClick={() => setShowForm(!showForm)} variant="outline">
                   <Plus className="h-4 w-4" /> Add Fee Structure
@@ -1217,6 +1267,131 @@ export default function FeesPage() {
                 disabled={monthlyGenSubmitting || !monthlyGenForm.month}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
                 {monthlyGenSubmitting ? 'Generating...' : 'Generate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Apply Annual Charges modal */}
+      {showAnnual && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowAnnual(false)}>
+          <div onClick={e => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Apply Annual Charges to a Class</h3>
+                <p className="text-xs text-slate-500">One-time yearly charges (Annual, Books, Dress…) from the Fee Plan. Students already charged this year are skipped.</p>
+              </div>
+              <button onClick={() => setShowAnnual(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="text-xs text-slate-600">
+                Class
+                <select value={annualClassId} onChange={e => loadAnnualCharges(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                  <option value="">Select class</option>
+                  {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Section (optional)
+                <select value={annualSectionId} onChange={e => setAnnualSectionId(e.target.value)}
+                  disabled={!annualClassId}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 disabled:bg-slate-100">
+                  <option value="">All sections</option>
+                  {(classes.find((c: any) => c.id === annualClassId)?.sections || []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Post in month
+                <input type="month" value={annualMonth} onChange={e => setAnnualMonth(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+              </label>
+            </div>
+
+            {annualLoading && <div className="text-center py-6 text-slate-400 text-sm">Loading fee plan…</div>}
+
+            {!annualLoading && annualClassId && annualCharges.length === 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                This class has no charges in the Annual Fee Plan. Add them in Settings → Annual Fee Plan first.
+              </div>
+            )}
+
+            {annualCharges.length > 0 && (
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left w-10"></th>
+                      <th className="px-3 py-2 text-left">Charge</th>
+                      <th className="px-3 py-2 text-left">Category</th>
+                      <th className="px-3 py-2 text-right w-32">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {annualCharges.map((c, i) => (
+                      <tr key={i} className={c.selected ? '' : 'opacity-50'}>
+                        <td className="px-3 py-2">
+                          <input type="checkbox" checked={c.selected}
+                            onChange={e => setAnnualCharges(rs => rs.map((r, j) => j === i ? { ...r, selected: e.target.checked } : r))} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input value={c.description}
+                            onChange={e => setAnnualCharges(rs => rs.map((r, j) => j === i ? { ...r, description: e.target.value } : r))}
+                            className="w-full px-2 py-1 border border-slate-300 rounded text-sm text-slate-900" />
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{c.category.replace(/_/g, ' ')}</td>
+                        <td className="px-3 py-2">
+                          <input type="number" value={c.amount}
+                            onChange={e => setAnnualCharges(rs => rs.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                            className="w-full px-2 py-1 border border-slate-300 rounded text-right text-sm text-slate-900" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 font-semibold text-slate-900">
+                      <td colSpan={3} className="px-3 py-2 text-right">Selected total per student</td>
+                      <td className="px-3 py-2 text-right">{formatCurrency(annualSelectedTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+
+            {annualResult && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm space-y-1">
+                <p className="font-semibold text-green-800">Done</p>
+                <p className="text-green-700"><strong>{annualResult.chargesCreated}</strong> charges posted across <strong>{annualResult.studentsAffected}</strong> students · <strong>{annualResult.skipped}</strong> skipped (already charged this year)</p>
+                <p className="text-green-700">Total billed: <strong>{formatCurrency(annualResult.totalAmount)}</strong></p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowAnnual(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Close</button>
+              <button onClick={async () => {
+                const selected = annualCharges.filter(c => c.selected && (parseFloat(c.amount) || 0) > 0);
+                if (!annualClassId || selected.length === 0) { alert('Pick a class and at least one charge with an amount'); return; }
+                setAnnualSubmitting(true);
+                setAnnualResult(null);
+                try {
+                  const { data } = await api.post('/fees/ledger/apply-annual', {
+                    classId: annualClassId,
+                    sectionId: annualSectionId || undefined,
+                    month: annualMonth,
+                    charges: selected.map(c => ({ category: c.category, description: c.description, amount: parseFloat(c.amount) })),
+                  });
+                  setAnnualResult(data);
+                } catch (err: any) {
+                  alert(err.response?.data?.error || 'Failed to apply annual charges');
+                } finally {
+                  setAnnualSubmitting(false);
+                }
+              }}
+                disabled={annualSubmitting || !annualClassId || annualSelectedTotal <= 0}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+                {annualSubmitting ? 'Applying…' : 'Apply to Class'}
               </button>
             </div>
           </div>

@@ -46,6 +46,15 @@ export async function GET(request: NextRequest) {
 
     // ─── Classes ───
     log('Creating classes...');
+    // Play section (pre-primary): negative/zero grades keep promotion order NUR → LKG → UKG → Class 1
+    const playClasses = [
+      { name: 'NUR', numericGrade: -2 },
+      { name: 'LKG', numericGrade: -1 },
+      { name: 'UKG', numericGrade: 0 },
+    ];
+    for (const pc of playClasses) {
+      await prisma.class.upsert({ where: { name: pc.name }, update: {}, create: pc });
+    }
     for (let grade = 1; grade <= 10; grade++) {
       await prisma.class.upsert({
         where: { name: `Class ${grade}` },

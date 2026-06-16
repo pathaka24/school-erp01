@@ -45,7 +45,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     'admissionDate', 'admittedGrade', 'house', 'stream', 'rollNumber',
     'prevSchoolName', 'prevSchoolBoard', 'prevLastGrade', 'prevTCNumber',
     'height', 'weight', 'vision', 'hearing', 'allergies', 'medicalConditions', 'disability',
-    'emergencyContactName', 'emergencyContactPhone',
+    'emergencyContactName', 'emergencyContactPhone', 'feeExempt',
   ];
   const numericFields = ['annualIncome', 'height', 'weight'];
   const dateFields = ['dateOfBirth', 'admissionDate'];
@@ -97,9 +97,12 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   if (auth instanceof Response) return auth;
 
   const { id } = await params;
+  const sp = request.nextUrl.searchParams;
   // ?archiveFees=true → also soft-archive (void) the student's fee ledger.
   // Records stay recoverable; default keeps them untouched.
-  const archiveFees = request.nextUrl.searchParams.get('archiveFees') === 'true';
+  const archiveFees = sp.get('archiveFees') === 'true';
+  const leftReason = sp.get('reason') || null;
+  const tcNumber = sp.get('tcNumber') || null;
 
   const student = await prisma.student.findUnique({ where: { id } });
   if (!student) return Response.json({ error: 'Student not found' }, { status: 404 });
@@ -111,9 +114,14 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   }
 
   // Soft delete: deactivate the user instead of hard-deleting (preserves audit trail)
+  if (leftReason || tcNumber) {
+    await prisma.student.update({ where: { id }, data: { leftReason, tcNumber } });
+  }
   await prisma.user.update({
     where: { id: student.userId },
-    data: { isActive: false, deletedAt: new Date(), deletedBy: auth.userId } as any,
+    data: { isActive: false, deletedAt: new Date(), deletedBy: auth.userId },
   });
   return Response.json({ message: 'Student deactivated', feesArchived });
 }
+
+// POST /api/students/[id]/restore is handled in ./restore/route.ts

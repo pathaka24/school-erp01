@@ -40,8 +40,9 @@ export default function FinancePage() {
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [showSalaryForm, setShowSalaryForm] = useState(false);
   const [expForm, setExpForm] = useState({
-    category: 'MISCELLANEOUS', title: '', description: '', amount: '', date: '', paidTo: '', paymentMode: 'CASH', receiptRef: '',
+    category: 'MISCELLANEOUS', title: '', description: '', amount: '', date: '', paidTo: '', paymentMode: 'CASH', receiptRef: '', status: 'PAID',
   });
+  const [expenseStatusFilter, setExpenseStatusFilter] = useState('');
   const [salForm, setSalForm] = useState({
     teacherId: '', month: new Date().toISOString().slice(0, 7), basicPay: '', hra: '', da: '', ta: '', deductions: '',
   });
@@ -83,7 +84,7 @@ export default function FinancePage() {
     try {
       await api.post('/finance/expenses', expForm);
       setShowExpenseForm(false);
-      setExpForm({ category: 'MISCELLANEOUS', title: '', description: '', amount: '', date: '', paidTo: '', paymentMode: 'CASH', receiptRef: '' });
+      setExpForm({ category: 'MISCELLANEOUS', title: '', description: '', amount: '', date: '', paidTo: '', paymentMode: 'CASH', receiptRef: '', status: 'PAID' });
       refreshData();
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed');
@@ -112,6 +113,26 @@ export default function FinancePage() {
     await api.delete(`/finance/expenses/${id}`);
     refreshData();
   };
+
+  const markExpensePaid = async (id: string) => {
+    await api.patch(`/finance/expenses/${id}`, { markPaid: true });
+    refreshData();
+  };
+
+  const markExpenseUnpaid = async (id: string) => {
+    await api.patch(`/finance/expenses/${id}`, { markUnpaid: true });
+    refreshData();
+  };
+
+  const EXP_STATUS_COLORS: Record<string, string> = {
+    PAID: 'bg-green-100 text-green-700',
+    UNPAID: 'bg-red-100 text-red-700',
+    PARTIAL: 'bg-amber-100 text-amber-700',
+  };
+
+  const visibleExpenses = expenseStatusFilter
+    ? expenses.filter(e => (e.status || 'PAID') === expenseStatusFilter)
+    : expenses;
 
   // Monthly chart data
   const allMonths = summary ? [...new Set([
@@ -154,6 +175,9 @@ export default function FinancePage() {
                   <div>
                     <p className="text-xs text-slate-500">Total Expenses</p>
                     <p className="text-lg font-bold text-red-600">{formatCurrency(summary?.totalExpenses || 0)}</p>
+                    {summary?.totalExpensesPending > 0 && (
+                      <p className="text-[11px] text-amber-600">+ {formatCurrency(summary.totalExpensesPending)} unpaid bills</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -301,6 +325,10 @@ export default function FinancePage() {
                         {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
                       </select>
                       <input placeholder="Receipt/Invoice Ref" value={expForm.receiptRef} onChange={e => setExpForm({ ...expForm, receiptRef: e.target.value })} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      <select value={expForm.status} onChange={e => setExpForm({ ...expForm, status: e.target.value })} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                        <option value="PAID">Paid now</option>
+                        <option value="UNPAID">Unpaid (bill pending)</option>
+                      </select>
                       <input placeholder="Description" value={expForm.description} onChange={e => setExpForm({ ...expForm, description: e.target.value })} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                       <div className="flex gap-2">
                         <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">Save</button>
@@ -310,7 +338,17 @@ export default function FinancePage() {
                   </div>
                 )}
 
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                {/* Status filter */}
+                <div className="flex gap-1">
+                  {[['', 'All'], ['UNPAID', 'Unpaid'], ['PARTIAL', 'Partial'], ['PAID', 'Paid']].map(([val, label]) => (
+                    <button key={val} onClick={() => setExpenseStatusFilter(val)}
+                      className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${expenseStatusFilter === val ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
@@ -318,29 +356,50 @@ export default function FinancePage() {
                         <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Category</th>
                         <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Title</th>
                         <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Paid To</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-500">Mode</th>
                         <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Amount</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium text-slate-500"></th>
+                        <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Paid</th>
+                        <th className="text-center px-4 py-3 text-sm font-medium text-slate-500">Status</th>
+                        <th className="text-right px-4 py-3 text-sm font-medium text-slate-500">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {expenses.length === 0 ? (
-                        <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No expenses recorded</td></tr>
-                      ) : expenses.map(exp => (
+                      {visibleExpenses.length === 0 ? (
+                        <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No expenses recorded</td></tr>
+                      ) : visibleExpenses.map(exp => {
+                        const status = exp.status || 'PAID';
+                        const due = (exp.amount || 0) - (exp.paidAmount ?? exp.amount);
+                        return (
                         <tr key={exp.id} className="hover:bg-slate-50">
-                          <td className="px-4 py-3 text-sm text-slate-500">{formatDate(exp.date)}</td>
+                          <td className="px-4 py-3 text-sm text-slate-500 whitespace-nowrap">{formatDate(exp.date)}</td>
                           <td className="px-4 py-3 text-sm">
                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${categoryColors[exp.category] || 'bg-slate-100'}`}>{exp.category}</span>
                           </td>
-                          <td className="px-4 py-3 text-sm text-slate-900 font-medium">{exp.title}</td>
+                          <td className="px-4 py-3 text-sm text-slate-900 font-medium">{exp.title}{exp.paymentMode ? <span className="text-xs text-slate-400 ml-1">· {exp.paymentMode}</span> : ''}</td>
                           <td className="px-4 py-3 text-sm text-slate-500">{exp.paidTo || '-'}</td>
-                          <td className="px-4 py-3 text-sm text-slate-500">{exp.paymentMode || '-'}</td>
-                          <td className="px-4 py-3 text-sm text-red-600 font-semibold text-right">{formatCurrency(exp.amount)}</td>
-                          <td className="px-4 py-3 text-sm">
-                            <button onClick={() => deleteExpense(exp.id)} className="p-1 text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></button>
+                          <td className="px-4 py-3 text-sm text-slate-900 font-semibold text-right">{formatCurrency(exp.amount)}</td>
+                          <td className="px-4 py-3 text-sm text-right">
+                            <span className="text-green-600 font-medium">{formatCurrency(exp.paidAmount ?? exp.amount)}</span>
+                            {due > 0.005 && <div className="text-xs text-red-500">due {formatCurrency(due)}</div>}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${EXP_STATUS_COLORS[status]}`}>{status}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex gap-1 justify-end">
+                              {status !== 'PAID' && (
+                                <button onClick={() => markExpensePaid(exp.id)} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 flex items-center gap-1">
+                                  <CheckCircle className="h-3 w-3" /> Mark Paid
+                                </button>
+                              )}
+                              {status === 'PAID' && (
+                                <button onClick={() => markExpenseUnpaid(exp.id)} className="px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200" title="Mark as unpaid">Unpay</button>
+                              )}
+                              <button onClick={() => deleteExpense(exp.id)} className="p-1 text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></button>
+                            </div>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

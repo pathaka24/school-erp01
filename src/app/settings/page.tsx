@@ -5,6 +5,7 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { Save, Plus, Trash2, GripVertical } from 'lucide-react';
 import { getAcademicYears, compressImage } from '@/lib/utils';
+import { useFeedback } from '@/components/ui/feedback';
 
 const CATEGORIES = ['FORMATIVE', 'SUMMATIVE', 'INTERNAL', 'PRACTICAL'];
 
@@ -26,6 +27,9 @@ export default function SettingsPage() {
   const [teachersList, setTeachersList] = useState<any[]>([]);
   const [classesLoading, setClassesLoading] = useState(false);
   const [savingSectionId, setSavingSectionId] = useState<string | null>(null);
+  const [newClass, setNewClass] = useState({ name: '', numericGrade: '', sections: 'A' });
+  const [addingClass, setAddingClass] = useState(false);
+  const { toast } = useFeedback();
   // Templates
   const [templates, setTemplates] = useState<any[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -41,6 +45,9 @@ export default function SettingsPage() {
   const [feePlan, setFeePlan] = useState<any>(null);
   const [feePlanYear, setFeePlanYear] = useState('2025-2026');
   const [feeExpanded, setFeeExpanded] = useState<string | null>(null);
+  // Ledger period lock (YYYY-MM; '' = unlocked)
+  const [feeLockMonth, setFeeLockMonth] = useState('');
+  const [savingFeeLock, setSavingFeeLock] = useState(false);
 
   // General settings form
   const [general, setGeneral] = useState({
@@ -84,6 +91,7 @@ export default function SettingsPage() {
       api.get('/settings/general').then(r => {
         setSettings(r.data);
         setGeneral(prev => ({ ...prev, ...r.data }));
+        if (typeof r.data.feeLockMonth === 'string') setFeeLockMonth(r.data.feeLockMonth);
       }),
       api.get('/settings/grade-scale').then(r => setGrades(r.data)),
       api.get('/settings/exam-patterns').then(r => setPatterns(r.data)),
@@ -107,6 +115,39 @@ export default function SettingsPage() {
     if (tab === 'classes' && classList.length === 0) loadClassesTab();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  const saveFeeLock = async () => {
+    setSavingFeeLock(true);
+    try {
+      await api.put('/settings/general', { feeLockMonth });
+      toast('success', feeLockMonth
+        ? `Fee ledger locked through ${feeLockMonth}`
+        : 'Fee ledger lock removed');
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to save ledger lock');
+    } finally {
+      setSavingFeeLock(false);
+    }
+  };
+
+  const addClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddingClass(true);
+    try {
+      await api.post('/classes', {
+        name: newClass.name.trim(),
+        numericGrade: parseInt(newClass.numericGrade, 10),
+        sections: newClass.sections.split(',').map(s => s.trim()).filter(Boolean),
+      });
+      toast('success', `Class "${newClass.name.trim()}" created`);
+      setNewClass({ name: '', numericGrade: '', sections: 'A' });
+      loadClassesTab();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to create class');
+    } finally {
+      setAddingClass(false);
+    }
+  };
 
   // Templates loader + helpers
   const loadTemplates = async () => {
@@ -556,6 +597,28 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
+                {/* Ledger period lock */}
+                <div className="bg-white rounded-xl border border-slate-200 p-5">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">Ledger Period Lock</h3>
+                      <p className="text-xs text-slate-500 max-w-xl">
+                        Entries in the locked months (and earlier) become read-only — no one can edit, void, restore, or delete them.
+                        Lock a month after you reconcile it. Clear the field to unlock everything.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="month" value={feeLockMonth}
+                        onChange={e => setFeeLockMonth(e.target.value)}
+                        className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      <button onClick={saveFeeLock} disabled={savingFeeLock}
+                        className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-900 disabled:opacity-50">
+                        {savingFeeLock ? 'Saving…' : feeLockMonth ? 'Lock through this month' : 'Save (unlocked)'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Class-wise fee table */}
                 {feePlan.classes.map((cls: any) => {
                   const isExpanded = feeExpanded === cls.classId;
@@ -950,6 +1013,51 @@ export default function SettingsPage() {
                       className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200">Refresh</button>
                   </div>
                 </div>
+
+                {/* Add class */}
+                <form onSubmit={addClass} className="bg-white rounded-xl border border-slate-200 p-5">
+                  <h3 className="text-sm font-semibold text-slate-900 mb-1">Add Class</h3>
+                  <p className="text-xs text-slate-500 mb-3">
+                    Grade position controls ordering and yearly promotion (each class promotes to the next position).
+                    Pre-primary: Nursery → LKG → UKG → Class 1.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <label className="text-xs text-slate-600">
+                      Class name
+                      <input value={newClass.name} required
+                        onChange={e => setNewClass({ ...newClass, name: e.target.value })}
+                        placeholder="e.g. NUR, LKG, UKG, Class 11"
+                        className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Grade position
+                      <select value={newClass.numericGrade} required
+                        onChange={e => setNewClass({ ...newClass, numericGrade: e.target.value })}
+                        className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                        <option value="">Select…</option>
+                        <option value="-2">Nursery (before LKG)</option>
+                        <option value="-1">LKG (before UKG)</option>
+                        <option value="0">UKG (before Class 1)</option>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map(g => (
+                          <option key={g} value={g}>Class {g}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Sections (comma-separated)
+                      <input value={newClass.sections}
+                        onChange={e => setNewClass({ ...newClass, sections: e.target.value })}
+                        placeholder="A, B"
+                        className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <div className="flex items-end">
+                      <button type="submit" disabled={addingClass}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+                        <Plus className="h-4 w-4" /> {addingClass ? 'Adding…' : 'Add Class'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
 
                 {classesLoading && <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>}
 

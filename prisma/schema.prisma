@@ -249,6 +249,9 @@ model Student {
   sectionId   String
   parentId    String?
   familyId    String?
+  feeExempt   Boolean  @default(false) // excluded from monthly fee generation (manual + cron)
+  leftReason  String?  // why the student left (TC issued, transferred, graduated…); user.deletedAt = left date
+  tcNumber    String?  // transfer certificate number issued on leaving
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1053,6 +1056,9 @@ model Expense {
   title       String
   description String?
   amount      Float
+  paidAmount  Float         @default(0)    // how much of this expense has been paid
+  status      String        @default("PAID") // PAID, UNPAID, PARTIAL
+  paidDate    DateTime?     // when it was (last) paid
   date        DateTime      @db.Date
   paidTo      String?       // vendor / staff name
   paymentMode String?       // CASH, CHEQUE, BANK_TRANSFER, UPI

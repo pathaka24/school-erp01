@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
   let chargesCreated = 0;
   let depositsCreated = 0;
   const errors: { studentId: string; reason: string }[] = [];
+  // Auto receipt numbers for deposits saved without one — same RCP-<ts> scheme
+  // as the single-deposit route, suffixed per deposit within this batch
+  const receiptBase = `RCP-${Date.now()}`;
 
   for (const row of rows) {
     const { studentId, monthlyFee, otherCharge, deposit } = row || {};
@@ -94,7 +97,7 @@ export async function POST(request: NextRequest) {
             balanceAfter: 0,
             paymentMethod: deposit.paymentMethod || 'CASH',
             receivedBy: deposit.receivedBy || null,
-            receiptNumber: deposit.receiptNumber || null,
+            receiptNumber: deposit.receiptNumber || `${receiptBase}-${String(depositsCreated + 1).padStart(2, '0')}`,
           },
         });
         depositsCreated++;
