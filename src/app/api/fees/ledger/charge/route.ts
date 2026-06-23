@@ -55,13 +55,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Charge date: explicit entryDate (with real time) if given, else default to
+  // the first of the month (keeps month-start ordering for callers that don't set it,
+  // e.g. opening-balance / previous-year charges).
+  const parsed = body.entryDate ? new Date(body.entryDate) : null;
+  const chargeDate = parsed && !isNaN(parsed.getTime())
+    ? parsed
+    : (() => { const d = new Date(month + '-01T00:00:00Z'); return isNaN(d.getTime()) ? new Date() : d; })();
+
   // Create charge entries for each student. balanceAfter is filled in after.
   const entries = [];
   const affected: string[] = [];
   for (const studentId of targetIds) {
     const amt = amountFor(studentId);
     if (!(amt > 0)) continue; // skip students with no amount in per-student mode
-    const entryDate = new Date(month + '-01T00:00:00Z');
     const entry = await prisma.feeLedger.create({
       data: {
         studentId,
@@ -71,7 +78,7 @@ export async function POST(request: NextRequest) {
         description: entryDescription,
         amount: amt,
         balanceAfter: 0,
-        date: isNaN(entryDate.getTime()) ? new Date() : entryDate,
+        date: chargeDate,
       },
       include: {
         student: { include: { user: { select: { firstName: true, lastName: true } } } },

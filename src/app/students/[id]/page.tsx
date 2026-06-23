@@ -64,8 +64,8 @@ export default function StudentProfilePage() {
   // Inline amount correction (click the number to fix it)
   const [inlineAmount, setInlineAmount] = useState<{ id: string; value: string } | null>(null);
   const [inlineAmountSaving, setInlineAmountSaving] = useState(false);
-  const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
-  const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
+  const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '' });
+  const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '', date: '' });
   // Family view: per-child charge amounts (studentId -> amount string)
   const [chargePerStudent, setChargePerStudent] = useState<Record<string, string>>({});
   // Siblings (Parent Info tab)
@@ -77,7 +77,7 @@ export default function StudentProfilePage() {
   const [showDepositForm, setShowDepositForm] = useState(false);
   const [showChargeForm, setShowChargeForm] = useState(false);
   // Inline per-month deposit inside the ledger table
-  const [inlineDeposit, setInlineDeposit] = useState<{ month: string; amount: string; paymentMethod: string; receivedBy: string } | null>(null);
+  const [inlineDeposit, setInlineDeposit] = useState<{ month: string; amount: string; paymentMethod: string; receivedBy: string; date: string } | null>(null);
   const [inlineDepositSaving, setInlineDepositSaving] = useState(false);
   const [showOpeningBalance, setShowOpeningBalance] = useState(false);
   const [openingForm, setOpeningForm] = useState({ amount: '', paidAmount: '', paymentMethod: 'CASH', year: '2024-2025', month: '' });
@@ -304,8 +304,9 @@ export default function StudentProfilePage() {
         amount: parseFloat(depositForm.amount),
         paymentMethod: depositForm.paymentMethod,
         receivedBy: depositForm.receivedBy || undefined,
+        entryDate: depositForm.date || undefined,
       });
-      setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '' });
+      setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '' });
       setShowDepositForm(false);
       loadLedger();
     } catch (err: any) {
@@ -325,6 +326,8 @@ export default function StudentProfilePage() {
         month: chargeForm.month || currentMonth(),
         category: chargeForm.category,
         description: chargeForm.description || chargeForm.category.replace(/_/g, ' '),
+        // Picked date, else the actual current date+time so the charge is timestamped
+        entryDate: chargeForm.date || new Date().toISOString(),
       };
       if (isFamily) {
         // Per-child amounts (Saurya ₹700, Somya ₹650…)
@@ -343,7 +346,7 @@ export default function StudentProfilePage() {
         payload.amount = parseFloat(chargeForm.amount);
       }
       await api.post('/fees/ledger/charge', payload);
-      setChargeForm({ category: 'MONTHLY_FEE', description: '', amount: '', month: '' });
+      setChargeForm({ category: 'MONTHLY_FEE', description: '', amount: '', month: '', date: '' });
       setChargePerStudent({});
       setShowChargeForm(false);
       loadLedger();
@@ -361,6 +364,7 @@ export default function StudentProfilePage() {
       amount: monthDue > 0 ? String(monthDue) : '',
       paymentMethod: 'CASH',
       receivedBy: actorName || '',
+      date: '',
     });
   };
 
@@ -375,6 +379,7 @@ export default function StudentProfilePage() {
         amount: parseFloat(inlineDeposit.amount),
         paymentMethod: inlineDeposit.paymentMethod,
         receivedBy: inlineDeposit.receivedBy || undefined,
+        entryDate: inlineDeposit.date || undefined,
       });
       const label = new Date(inlineDeposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
       toast('success', `Deposit recorded for ${label}`);
@@ -2467,14 +2472,30 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
               {showDepositForm && (
                 <form onSubmit={handleDeposit} className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-3">
                   <h3 className="text-sm font-semibold text-green-800">Record Deposit</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                    <input type="month" value={depositForm.month} onChange={e => setDepositForm({...depositForm, month: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" placeholder="Month" />
-                    <input type="number" placeholder="Amount (₹)" value={depositForm.amount} onChange={e => setDepositForm({...depositForm, amount: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
-                    <select value={depositForm.paymentMethod} onChange={e => setDepositForm({...depositForm, paymentMethod: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                      {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
-                    </select>
-                    <input placeholder="Received by" value={depositForm.receivedBy} onChange={e => setDepositForm({...depositForm, receivedBy: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
-                    <div className="flex gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                    <label className="text-xs text-slate-600">
+                      Payment date
+                      <input type="date" value={depositForm.date} onChange={e => setDepositForm({...depositForm, date: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Month (for)
+                      <input type="month" value={depositForm.month} onChange={e => setDepositForm({...depositForm, month: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Amount (₹)
+                      <input type="number" placeholder="0" value={depositForm.amount} onChange={e => setDepositForm({...depositForm, amount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Method
+                      <select value={depositForm.paymentMethod} onChange={e => setDepositForm({...depositForm, paymentMethod: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                        {['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'].map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Received by
+                      <input placeholder="name" value={depositForm.receivedBy} onChange={e => setDepositForm({...depositForm, receivedBy: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <div className="flex gap-2 items-end">
                       <button type="submit" disabled={depositSaving} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">{depositSaving ? 'Saving…' : 'Save'}</button>
                       <button type="button" onClick={() => setShowDepositForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
                     </div>
@@ -2491,12 +2512,25 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                     return (
                       <>
                         {/* Shared fields */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <input type="month" value={chargeForm.month} onChange={e => setChargeForm({...chargeForm, month: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" placeholder="Month" />
-                          <select value={chargeForm.category} onChange={e => setChargeForm({...chargeForm, category: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                            {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'AD_HOC', 'PREVIOUS_BALANCE'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
-                          </select>
-                          <input placeholder="Description (optional)" value={chargeForm.description} onChange={e => setChargeForm({...chargeForm, description: e.target.value})} className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                          <label className="text-xs text-slate-600">
+                            Charge date
+                            <input type="date" value={chargeForm.date} onChange={e => setChargeForm({...chargeForm, date: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
+                          <label className="text-xs text-slate-600">
+                            Month (for)
+                            <input type="month" value={chargeForm.month} onChange={e => setChargeForm({...chargeForm, month: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
+                          <label className="text-xs text-slate-600">
+                            Category
+                            <select value={chargeForm.category} onChange={e => setChargeForm({...chargeForm, category: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                              {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'AD_HOC', 'PREVIOUS_BALANCE'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                            </select>
+                          </label>
+                          <label className="text-xs text-slate-600">
+                            Description
+                            <input placeholder="(optional)" value={chargeForm.description} onChange={e => setChargeForm({...chargeForm, description: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
                         </div>
 
                         {isFamily ? (
@@ -2821,6 +2855,12 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                                     <span className="text-sm font-semibold text-green-800 pb-2">
                                       Deposit — {new Date(row.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                                     </span>
+                                    <label className="text-xs text-slate-600">
+                                      Payment date
+                                      <input type="date" value={dep.date}
+                                        onChange={ev => setInlineDeposit({ ...dep, date: ev.target.value })}
+                                        className="mt-1 block px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                                    </label>
                                     <label className="text-xs text-slate-600">
                                       Amount (₹)
                                       <input type="number" step="0.01" min="1" autoFocus required value={dep.amount}
@@ -3234,7 +3274,10 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                                   : <span className="text-slate-300">—</span>}
                               </td>
                               {isFamily && <td className="px-3 py-2 text-slate-700 font-medium">{nameById.get(e.studentId) || '—'}</td>}
-                              <td className="px-3 py-2 text-slate-700">{new Date(e.date).toLocaleDateString('en-IN')}</td>
+                              <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+                                <div>{new Date(e.date).toLocaleDateString('en-IN')}</div>
+                                <div className="text-[10px] text-slate-400">{new Date(e.date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</div>
+                              </td>
                               <td className="px-3 py-2 text-slate-700">{e.month}</td>
                               <td className="px-3 py-2">
                                 <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
