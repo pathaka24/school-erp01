@@ -50,23 +50,32 @@ export async function recomputeStudentLedger(studentId: string) {
     balanceUpdates.push({ id: e.id, balanceAfter: balance });
   }
 
-  // Persist changes only where they differ
-  await prisma.$transaction(async tx => {
-    for (const u of balanceUpdates) {
-      const entry = entries.find(e => e.id === u.id)!;
-      const expectedPaid = entry.type === 'CHARGE' ? (finalPaid.get(entry.id) ?? 0) : 0;
-      const balanceChanged = Math.abs(entry.balanceAfter - u.balanceAfter) > 0.01;
-      const paidChanged = Math.abs(entry.paidAmount - expectedPaid) > 0.01;
-      if (!balanceChanged && !paidChanged) continue;
-      await tx.feeLedger.update({
+  // Build the list of rows that actually changed
+  const ops = [];
+  for (const u of balanceUpdates) {
+    const entry = entries.find(e => e.id === u.id)!;
+    const expectedPaid = entry.type === 'CHARGE' ? (finalPaid.get(entry.id) ?? 0) : 0;
+    const balanceChanged = Math.abs(entry.balanceAfter - u.balanceAfter) > 0.01;
+    const paidChanged = Math.abs(entry.paidAmount - expectedPaid) > 0.01;
+    if (!balanceChanged && !paidChanged) continue;
+    ops.push(
+      prisma.feeLedger.update({
         where: { id: u.id },
         data: {
           ...(balanceChanged ? { balanceAfter: u.balanceAfter } : {}),
           ...(paidChanged ? { paidAmount: expectedPaid } : {}),
         },
-      });
-    }
-  });
+      })
+    );
+  }
+
+  // Persist atomically via the array form of $transaction. Unlike the interactive
+  // form (async tx => …), this does NOT impose Prisma's default 5s transaction
+  // timeout / 2s connection-acquire wait, which a student with many entries was
+  // tripping over the cross-region Supabase pooler (connection_limit=1).
+  if (ops.length > 0) {
+    await prisma.$transaction(ops);
+  }
 
   return { balance, entriesProcessed: entries.length };
 }

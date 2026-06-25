@@ -332,6 +332,7 @@ export default function StudentProfilePage() {
             studentId: sid, month, amount: discAmt,
             category: depositForm.discountCategory,
             reason: depositForm.discountReason.trim(),
+            entryDate: depositForm.date || undefined,
           });
         }
       }
@@ -389,7 +390,7 @@ export default function StudentProfilePage() {
   };
 
   const openInlineDeposit = (row: any) => {
-    const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0));
+    const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0) - (row.discount || 0));
     setInlineDeposit({
       month: row.month,
       amount: monthDue > 0 ? String(monthDue) : '',
@@ -424,6 +425,7 @@ export default function StudentProfilePage() {
         await api.post('/fees/ledger/discount', {
           studentId: id, month: inlineDeposit.month, amount: discAmt,
           category: 'AD_HOC', reason: inlineDeposit.discountReason.trim(),
+          entryDate: inlineDeposit.date || undefined,
         });
       }
       const label = new Date(inlineDeposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -2414,11 +2416,12 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                 {(() => {
                   const billed = ledgerData?.totals?.totalCharged || 0;
                   const paid = ledgerData?.totals?.totalDeposited || 0;
+                  const discount = ledgerData?.totals?.totalDiscount || 0;
                   const balance = ledgerData?.currentBalance || 0;
                   const cm = currentMonth();
                   const ents = ledgerData?.entries || [];
                   const mCharge = ents.filter((e: any) => !e.voidedAt && e.type === 'CHARGE' && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
-                  const mPaid = ents.filter((e: any) => !e.voidedAt && e.type === 'DEPOSIT' && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
+                  const mPaid = ents.filter((e: any) => !e.voidedAt && (e.type === 'DEPOSIT' || e.type === 'DISCOUNT') && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
                   const mDue = mCharge - mPaid;
                   const cmLabel = new Date(cm + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
                   return (
@@ -2430,6 +2433,7 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                       <div className="rounded-lg border border-green-200 bg-green-50/50 p-3">
                         <p className="text-xs text-slate-500">Total Paid</p>
                         <p className="text-xl font-bold text-green-600">{formatCurrency(paid)}</p>
+                        {discount > 0 && <p className="text-[11px] text-violet-600">+ {formatCurrency(discount)} discount</p>}
                       </div>
                       <div className={`rounded-lg border p-3 ${balance > 0 ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
                         <p className="text-xs text-slate-500">Balance Due</p>
@@ -2967,12 +2971,13 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                 let cumDeposits = 0;
                 const decoratedRows = ledgerData.ledger.map((row: any) => {
                   cumMonthlyFee += row.monthlyFee || 0;
-                  cumDeposits += row.deposited || 0;
+                  // Discounts settle dues like deposits — count them toward "paid"
+                  cumDeposits += (row.deposited || 0) + (row.discount || 0);
                   const monthlyFeePaid = row.monthlyFee > 0 && cumDeposits >= cumMonthlyFee;
                   let status: 'PAID' | 'PARTIAL' | 'DUE' | 'NONE';
-                  if (row.monthlyFee === 0 && row.otherCharges === 0 && row.deposited === 0) status = 'NONE';
+                  if (row.monthlyFee === 0 && row.otherCharges === 0 && row.deposited === 0 && (row.discount || 0) === 0) status = 'NONE';
                   else if (row.balance <= 0) status = 'PAID';
-                  else if (cumDeposits > 0 || row.deposited > 0) status = 'PARTIAL';
+                  else if (cumDeposits > 0 || row.deposited > 0 || (row.discount || 0) > 0) status = 'PARTIAL';
                   else status = 'DUE';
                   return { ...row, monthlyFeePaid, status };
                 });
@@ -3033,7 +3038,10 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                               <td className="px-4 py-3 text-sm text-right">
                                 {row.deposited > 0 ? (
                                   <span className="text-green-600 font-semibold">{formatCurrency(row.deposited)}</span>
-                                ) : '—'}
+                                ) : (row.discount > 0 ? '' : '—')}
+                                {row.discount > 0 && (
+                                  <div className="text-xs text-violet-600">− {formatCurrency(row.discount)} disc.</div>
+                                )}
                               </td>
                               <td className={`px-4 py-3 text-sm font-bold text-right ${row.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
                                 {formatCurrency(row.balance)}
@@ -3064,7 +3072,7 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                               </td>
                               <td className="px-4 py-3 text-center">
                                 {(() => {
-                                  const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0));
+                                  const monthDue = Math.max(0, (row.monthlyFee || 0) + (row.otherCharges || 0) - (row.deposited || 0) - (row.discount || 0));
                                   const isLocked = ledgerData?.feeLockMonth && row.month <= ledgerData.feeLockMonth;
                                   if (isLocked) return <span className="text-slate-300 text-xs" title="Month is locked">🔒</span>;
                                   if (monthDue <= 0) return <span className="text-green-500 text-xs">✓</span>;
@@ -3521,10 +3529,7 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                                   : <span className="text-slate-300">—</span>}
                               </td>
                               {isFamily && <td className="px-3 py-2 text-slate-700 font-medium">{nameById.get(e.studentId) || '—'}</td>}
-                              <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
-                                <div>{new Date(e.date).toLocaleDateString('en-IN')}</div>
-                                <div className="text-[10px] text-slate-400">{new Date(e.date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</div>
-                              </td>
+                              <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{new Date(e.date).toLocaleDateString('en-IN')}</td>
                               <td className="px-3 py-2 text-slate-700">{e.month}</td>
                               <td className="px-3 py-2">
                                 <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${

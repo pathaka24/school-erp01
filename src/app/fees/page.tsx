@@ -100,6 +100,11 @@ export default function FeesPage() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
+  // Collection date+time (blank = now). datetime-local string.
+  const [collectionDateTime, setCollectionDateTime] = useState('');
+  // Extra charges added at collection time (books, dress, etc.)
+  const [addCharges, setAddCharges] = useState(false);
+  const [extraCharges, setExtraCharges] = useState<{ category: string; description: string; amount: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<any>(null);
   const [combinedLedger, setCombinedLedger] = useState<any>(null); // combined family ledger
@@ -271,10 +276,19 @@ export default function FeesPage() {
     ? selectedStudents.reduce((sum, s) => sum + (parseFloat(discountPerStudent[s.id]) || 0), 0)
     : discountAmt;
 
+  // Extra charges added at collection (applied to each selected student)
+  const validExtraCharges = extraCharges
+    .map(c => ({ category: c.category, description: c.description.trim(), amount: parseFloat(c.amount) || 0 }))
+    .filter(c => c.amount > 0);
+  const totalExtraChargesPerStudent = validExtraCharges.reduce((s, c) => s + c.amount, 0);
+  const collectionEntryDate = collectionDateTime ? new Date(collectionDateTime).toISOString() : undefined;
+
   // Handle deposit — records to fee ledger for each student
   const handleCollect = async () => {
     if (selectedStudents.length === 0) return;
-    if (effectiveTotal <= 0 && !(addDiscount && totalDiscount > 0)) return; // need cash or a discount
+    const hasCharges = addCharges && totalExtraChargesPerStudent > 0;
+    const hasDiscount = addDiscount && totalDiscount > 0;
+    if (effectiveTotal <= 0 && !hasDiscount && !hasCharges) return; // need cash, a discount, or charges
     if (addDiscount && totalDiscount > 0 && discountReason.trim().length < 3) {
       alert('A reason (min 3 chars) is required for a discount');
       return;
@@ -284,6 +298,20 @@ export default function FeesPage() {
     try {
       const studentIds = selectedStudents.map(s => s.id);
       const isMultiple = selectedStudents.length > 1;
+
+      // Step 0: Extra charges (books, dress, etc.) — applied to each selected student
+      if (addCharges && validExtraCharges.length > 0) {
+        for (const c of validExtraCharges) {
+          await api.post('/fees/ledger/charge', {
+            studentIds,
+            month: depositMonth,
+            category: c.category,
+            description: c.description || c.category.replace(/_/g, ' '),
+            amount: c.amount,
+            entryDate: collectionEntryDate,
+          });
+        }
+      }
 
       // Step 1: Charge late fee if enabled
       let lateFeeCharged = 0;
@@ -299,6 +327,7 @@ export default function FeesPage() {
                 category: 'LATE_FEE',
                 description: 'Late fee',
                 amount: fee,
+                entryDate: collectionEntryDate,
               });
               lateFeeCharged += fee;
             }
@@ -311,6 +340,7 @@ export default function FeesPage() {
             category: 'LATE_FEE',
             description: 'Late fee',
             amount: lateFeeAmt,
+            entryDate: collectionEntryDate,
           });
           lateFeeCharged = lateFeeAmt;
         }
@@ -325,6 +355,7 @@ export default function FeesPage() {
           amount: effectiveTotal,
           paymentMethod,
           receivedBy: receivedBy || undefined,
+          entryDate: collectionEntryDate,
         };
 
         if (isMultiple && splitMode === 'custom') {
@@ -353,6 +384,7 @@ export default function FeesPage() {
               amount: disc,
               category: discountCategory,
               reason: discountReason.trim(),
+              entryDate: collectionEntryDate,
             });
             discountApplied += disc;
           }
@@ -389,6 +421,9 @@ export default function FeesPage() {
       setDiscountPerStudent({});
       setDiscountReason('');
       setDiscountCategory('AD_HOC');
+      setAddCharges(false);
+      setExtraCharges([]);
+      setCollectionDateTime('');
 
       // Refresh payments
       const pRes = await api.get('/fees/payments');
@@ -998,11 +1033,19 @@ export default function FeesPage() {
                         </div>
                       )}
 
-                      {/* Month */}
-                      <div>
-                        <label className="text-xs font-medium text-green-700">Month</label>
-                        <input type="month" value={depositMonth} onChange={e => setDepositMonth(e.target.value)}
-                          className="w-full px-3 py-2 border border-green-300 rounded-xl text-sm text-slate-900 mt-1" />
+                      {/* Month + collection date/time */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-xs font-medium text-green-700">Month (for)</label>
+                          <input type="month" value={depositMonth} onChange={e => setDepositMonth(e.target.value)}
+                            className="w-full px-3 py-2 border border-green-300 rounded-xl text-sm text-slate-900 mt-1" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-green-700">Collection date</label>
+                          <input type="date" value={collectionDateTime} onChange={e => setCollectionDateTime(e.target.value)}
+                            title="Leave blank for today; set to backdate the collection"
+                            className="w-full px-3 py-2 border border-green-300 rounded-xl text-sm text-slate-900 mt-1" />
+                        </div>
                       </div>
 
                       {/* Payment method */}
@@ -1024,6 +1067,48 @@ export default function FeesPage() {
                         <input placeholder="Name" value={receivedBy} onChange={e => setReceivedBy(e.target.value)}
                           className="w-full px-3 py-2 border border-green-300 rounded-xl text-sm text-slate-900 mt-1" />
                       </div>
+
+                      {/* Add charges (books, dress, etc.) */}
+                      {selectedStudents.length > 0 && (
+                        <div className={`rounded-xl border-2 transition-all ${addCharges ? 'border-orange-400 bg-orange-50' : 'border-dashed border-slate-200 bg-white'}`}>
+                          <button onClick={() => { setAddCharges(!addCharges); if (!addCharges && extraCharges.length === 0) setExtraCharges([{ category: 'BOOK', description: '', amount: '' }]); }}
+                            className="w-full flex items-center justify-between px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <Plus className={`h-4 w-4 ${addCharges ? 'text-orange-600' : 'text-slate-400'}`} />
+                              <span className={`text-xs font-medium ${addCharges ? 'text-orange-800' : 'text-slate-500'}`}>Add Charges (books, dress…)</span>
+                            </div>
+                            <div className={`w-8 h-4.5 rounded-full transition-colors ${addCharges ? 'bg-orange-500' : 'bg-slate-200'} relative`}>
+                              <div className={`w-3.5 h-3.5 rounded-full bg-white shadow absolute top-[2px] transition-all ${addCharges ? 'right-[2px]' : 'left-[2px]'}`} />
+                            </div>
+                          </button>
+                          {addCharges && (
+                            <div className="px-3 pb-3 space-y-2">
+                              {selectedStudents.length > 1 && <p className="text-[10px] text-orange-600">Applied to each selected student.</p>}
+                              {extraCharges.map((c, i) => (
+                                <div key={i} className="flex items-center gap-1.5">
+                                  <select value={c.category}
+                                    onChange={e => setExtraCharges(extraCharges.map((x, j) => j === i ? { ...x, category: e.target.value } : x))}
+                                    className="px-1.5 py-1 border border-orange-300 rounded text-[11px] text-slate-900 w-24">
+                                    {['BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'ANNUAL', 'REGISTRATION', 'ADMISSION', 'EXAM_FEE', 'FINE', 'TRANSPORT', 'AD_HOC'].map(cat => <option key={cat} value={cat}>{cat.replace(/_/g, ' ')}</option>)}
+                                  </select>
+                                  <input placeholder="description" value={c.description}
+                                    onChange={e => setExtraCharges(extraCharges.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                                    className="flex-1 px-2 py-1 border border-orange-300 rounded text-xs text-slate-900" />
+                                  <input type="number" placeholder="₹" value={c.amount}
+                                    onChange={e => setExtraCharges(extraCharges.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                                    className="w-20 px-2 py-1 border border-orange-300 rounded text-xs text-right font-bold text-slate-900" />
+                                  <button onClick={() => setExtraCharges(extraCharges.filter((_, j) => j !== i))} className="p-0.5 text-red-500 hover:text-red-700"><X className="h-3.5 w-3.5" /></button>
+                                </div>
+                              ))}
+                              <div className="flex items-center justify-between">
+                                <button onClick={() => setExtraCharges([...extraCharges, { category: 'BOOK', description: '', amount: '' }])}
+                                  className="text-xs text-orange-700 hover:underline">+ Add another</button>
+                                <span className="text-xs font-bold text-orange-800">Charges: {formatCurrency(totalExtraChargesPerStudent)}{selectedStudents.length > 1 ? ' each' : ''}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Late fee option */}
                       {selectedStudents.length > 0 && totalBalance > 0 && (
@@ -1210,8 +1295,8 @@ export default function FeesPage() {
 
                       {/* Submit */}
                       <Button className="w-full" variant="success" size="lg" onClick={handleCollect}
-                        disabled={submitting || selectedStudents.length === 0 || (effectiveTotal <= 0 && !(addDiscount && totalDiscount > 0))}>
-                        {submitting ? 'Processing...' : `Record Payment ${grandTotal > 0 ? formatCurrency(grandTotal) : (totalDiscount > 0 ? formatCurrency(totalDiscount) + ' discount' : '')}`}
+                        disabled={submitting || selectedStudents.length === 0 || (effectiveTotal <= 0 && !(addDiscount && totalDiscount > 0) && !(addCharges && totalExtraChargesPerStudent > 0))}>
+                        {submitting ? 'Processing...' : `Record ${grandTotal > 0 ? formatCurrency(grandTotal) : (totalDiscount > 0 ? formatCurrency(totalDiscount) + ' discount' : (totalExtraChargesPerStudent > 0 ? 'charges' : 'Payment'))}`}
                       </Button>
                     </CardContent>
                   </Card>

@@ -35,13 +35,21 @@ export async function POST(request: NextRequest) {
   const targetMonth = month && /^\d{4}-\d{2}$/.test(month)
     ? month
     : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const entryDate = new Date(targetMonth + '-01T00:00:00Z');
+
+  // Date the discount the same way a deposit is dated: use the explicit entryDate
+  // (so a discount collected alongside a deposit sits at the same point in the
+  // ledger and FIFO settles them together), else fall back to the 1st of the month.
+  const parsedEntry = body.entryDate ? new Date(body.entryDate) : null;
+  const fallback = new Date(targetMonth + '-01T00:00:00Z');
+  const discountDate = parsedEntry && !isNaN(parsedEntry.getTime())
+    ? parsedEntry
+    : (isNaN(fallback.getTime()) ? now : fallback);
 
   const entry = await prisma.feeLedger.create({
     data: {
       studentId,
       month: targetMonth,
-      date: isNaN(entryDate.getTime()) ? now : entryDate,
+      date: discountDate,
       type: 'DISCOUNT',
       category: category || 'AD_HOC',
       description: `Discount: ${reason.trim()}`,

@@ -146,6 +146,7 @@ export async function GET(
     otherDetails: string[];
     totalDue: number;
     deposited: number;
+    discount: number;
     balance: number;
     depositDates: string[];
     depositMethods: string[];
@@ -163,6 +164,7 @@ export async function GET(
         otherDetails: [],
         totalDue: 0,
         deposited: 0,
+        discount: 0,
         balance: 0,
         depositDates: [],
         depositMethods: [],
@@ -185,9 +187,14 @@ export async function GET(
       if (entry.paymentMethod) row.depositMethods.push(entry.paymentMethod);
       if (entry.receiptNumber) row.receiptNumbers.push(entry.receiptNumber);
       runningBalance -= entry.amount;
+    } else if (entry.type === 'DISCOUNT') {
+      // Discounts reduce what's owed like a deposit, but are tracked separately
+      // (not cash). Without this, the ledger balance was overstated.
+      row.discount += entry.amount;
+      runningBalance -= entry.amount;
     }
 
-    row.totalDue = runningBalance + row.deposited; // total before deposit
+    row.totalDue = runningBalance + row.deposited + row.discount; // gross charges before payments + discounts
     row.balance = runningBalance;
   }
 
@@ -201,6 +208,7 @@ export async function GET(
     totalOtherCharges: ledgerRows.reduce((s, r) => s + r.otherCharges, 0),
     totalCharged: 0,
     totalDeposited: ledgerRows.reduce((s, r) => s + r.deposited, 0),
+    totalDiscount: ledgerRows.reduce((s, r) => s + r.discount, 0),
   };
   totals.totalCharged = totals.totalMonthlyFees + totals.totalOtherCharges;
 
