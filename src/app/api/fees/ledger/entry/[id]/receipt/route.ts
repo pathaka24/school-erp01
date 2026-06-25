@@ -113,6 +113,7 @@ export async function GET(
       receivedBy: deposit.receivedBy,
       receiptNumber: deposit.receiptNumber,
       description: deposit.description,
+      breakdown: (() => { try { return deposit.breakdown ? JSON.parse(deposit.breakdown) : null; } catch { return null; } })(),
     },
     student: {
       id: deposit.student.id,

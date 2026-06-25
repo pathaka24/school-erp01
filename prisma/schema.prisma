@@ -904,6 +904,7 @@ model FeeLedger {
   paymentMethod String?  // for deposits: UPI, CASH, CARD, NET_BANKING, CHEQUE, DD
   receiptNumber String?  @unique
   receivedBy    String?  // who signed/received
+  breakdown     String?  // for deposits: JSON [{ label, amount }] — what the payment was for (receipt note; FIFO still settles)
   createdAt     DateTime @default(now())
 
   // Soft delete

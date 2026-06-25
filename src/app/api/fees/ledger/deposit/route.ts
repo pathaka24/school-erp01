@@ -35,6 +35,22 @@ export async function POST(request: NextRequest) {
   const hasCustomAmounts = perStudentAmounts && typeof perStudentAmounts === 'object';
   const shouldSplit = !hasCustomAmounts && splitEvenly !== false && studentIds.length > 1;
 
+  // Optional free-form breakdown of what the payment is for (single-student only).
+  // [{ label, amount }] — stored as a receipt note; FIFO still settles the dues.
+  let breakdownJson: string | null = null;
+  if (Array.isArray(body.breakdown) && studentIds.length === 1) {
+    const lines = body.breakdown
+      .map((l: any) => ({ label: String(l.label || '').trim(), amount: parseFloat(l.amount) || 0 }))
+      .filter((l: any) => l.label && l.amount > 0);
+    if (lines.length > 0) {
+      const sum = lines.reduce((s: number, l: any) => s + l.amount, 0);
+      if (Math.abs(sum - amount) > 0.5) {
+        return Response.json({ error: `Breakdown total (₹${sum}) must equal the deposit amount (₹${amount})` }, { status: 400 });
+      }
+      breakdownJson = JSON.stringify(lines);
+    }
+  }
+
   const entries = await prisma.$transaction(
     studentIds.map((studentId: string, i: number) => {
       const studentName = students.find(s => s.id === studentId);
@@ -64,6 +80,7 @@ export async function POST(request: NextRequest) {
           paymentMethod,
           receiptNumber: studentIds.length > 1 ? `${receiptBase}-${String(i + 1).padStart(2, '0')}` : receiptBase,
           receivedBy,
+          breakdown: breakdownJson,
           date: depositDate,
         },
       });

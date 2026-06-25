@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useFeedback } from '@/components/ui/feedback';
-import { Plus, UsersRound, ChevronRight, Search, UserPlus, Link2 } from 'lucide-react';
+import { Plus, UsersRound, ChevronRight, Search, UserPlus, Link2, CreditCard } from 'lucide-react';
 
 const SIBLING_DISCOUNT_RATE = 0.05; // 5%
 
 export default function FamilyPage() {
+  const router = useRouter();
   const { toast } = useFeedback();
   const [families, setFamilies] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
@@ -198,8 +200,10 @@ export default function FamilyPage() {
                     <p className="text-sm text-slate-500">{selectedFamily.familyId}</p>
                   </div>
                   {payStep === 0 && selectedFamily.students.length >= 1 && (
-                    <button onClick={() => setPayStep(1)} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
-                      Combined Payment
+                    <button onClick={() => router.push('/fees')}
+                      title="Collect family fees on the fee ledger (combined deposit, per-child amounts)"
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
+                      <CreditCard className="h-4 w-4" /> Collect Fees
                     </button>
                   )}
                 </div>

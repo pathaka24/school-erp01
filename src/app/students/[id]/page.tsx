@@ -60,11 +60,14 @@ export default function StudentProfilePage() {
   const [ledgerLoading, setLedgerLoading] = useState(false);     // loading the ledger
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null); // per-row void/restore/delete in progress
   const [bulkVoiding, setBulkVoiding] = useState(false);
+  const [statementYear, setStatementYear] = useState<number | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
   // Inline amount correction (click the number to fix it)
   const [inlineAmount, setInlineAmount] = useState<{ id: string; value: string } | null>(null);
   const [inlineAmountSaving, setInlineAmountSaving] = useState(false);
-  const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '' });
+  const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '', discount: '', discountCategory: 'AD_HOC', discountReason: '' });
+  // Free-form "what this payment is for" lines (single-student deposits)
+  const [depositBreakdown, setDepositBreakdown] = useState<{ label: string; amount: string }[]>([]);
   const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '', date: '' });
   // Family view: per-child charge amounts (studentId -> amount string)
   const [chargePerStudent, setChargePerStudent] = useState<Record<string, string>>({});
@@ -77,7 +80,7 @@ export default function StudentProfilePage() {
   const [showDepositForm, setShowDepositForm] = useState(false);
   const [showChargeForm, setShowChargeForm] = useState(false);
   // Inline per-month deposit inside the ledger table
-  const [inlineDeposit, setInlineDeposit] = useState<{ month: string; amount: string; paymentMethod: string; receivedBy: string; date: string } | null>(null);
+  const [inlineDeposit, setInlineDeposit] = useState<{ month: string; amount: string; paymentMethod: string; receivedBy: string; date: string; discount: string; discountReason: string } | null>(null);
   const [inlineDepositSaving, setInlineDepositSaving] = useState(false);
   const [showOpeningBalance, setShowOpeningBalance] = useState(false);
   const [openingForm, setOpeningForm] = useState({ amount: '', paidAmount: '', paymentMethod: 'CASH', year: '2024-2025', month: '' });
@@ -296,18 +299,46 @@ export default function StudentProfilePage() {
     const studentIds = ledgerFamily && ledgerData?.siblings?.length
       ? ledgerData.siblings.map((s: any) => s.id)
       : [id];
+    const depAmt = parseFloat(depositForm.amount) || 0;
+    const discAmt = parseFloat(depositForm.discount) || 0;
+    if (depAmt <= 0 && discAmt <= 0) { toast('error', 'Enter a deposit amount, a discount, or both'); return; }
+    if (discAmt > 0 && depositForm.discountReason.trim().length < 3) { toast('error', 'A reason (min 3 chars) is required for a discount'); return; }
+    // Free-form breakdown (single-student only) — must total the paid amount
+    const isFamilyDep = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+    const bdLines = (!isFamilyDep ? depositBreakdown : [])
+      .map(l => ({ label: l.label.trim(), amount: parseFloat(l.amount) || 0 }))
+      .filter(l => l.label && l.amount > 0);
+    if (bdLines.length > 0) {
+      const bdSum = bdLines.reduce((s, l) => s + l.amount, 0);
+      if (Math.abs(bdSum - depAmt) > 0.5) { toast('error', `Breakdown total (${formatCurrency(bdSum)}) must equal amount paid (${formatCurrency(depAmt)})`); return; }
+    }
     setDepositSaving(true);
     try {
-      await api.post('/fees/ledger/deposit', {
-        studentIds,
-        month: depositForm.month || currentMonth(),
-        amount: parseFloat(depositForm.amount),
-        paymentMethod: depositForm.paymentMethod,
-        receivedBy: depositForm.receivedBy || undefined,
-        entryDate: depositForm.date || undefined,
-      });
-      setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '' });
+      const month = depositForm.month || currentMonth();
+      // Cash deposit (skip if it's a discount-only entry, e.g. a full waiver)
+      if (depAmt > 0) {
+        await api.post('/fees/ledger/deposit', {
+          studentIds, month, amount: depAmt,
+          paymentMethod: depositForm.paymentMethod,
+          receivedBy: depositForm.receivedBy || undefined,
+          entryDate: depositForm.date || undefined,
+          breakdown: bdLines.length > 0 ? bdLines : undefined,
+        });
+      }
+      // Discount line(s) — separate DISCOUNT entry per student, reduces balance like a deposit
+      if (discAmt > 0) {
+        for (const sid of studentIds) {
+          await api.post('/fees/ledger/discount', {
+            studentId: sid, month, amount: discAmt,
+            category: depositForm.discountCategory,
+            reason: depositForm.discountReason.trim(),
+          });
+        }
+      }
+      setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '', discount: '', discountCategory: 'AD_HOC', discountReason: '' });
+      setDepositBreakdown([]);
       setShowDepositForm(false);
+      toast('success', discAmt > 0 ? `Recorded — ${formatCurrency(depAmt)} paid, ${formatCurrency(discAmt)} discount` : 'Deposit recorded');
       loadLedger();
     } catch (err: any) {
       toast('error', err.response?.data?.error || 'Failed to record deposit');
@@ -365,24 +396,38 @@ export default function StudentProfilePage() {
       paymentMethod: 'CASH',
       receivedBy: actorName || '',
       date: '',
+      discount: '',
+      discountReason: '',
     });
   };
 
   const saveInlineDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inlineDeposit) return;
+    const depAmt = parseFloat(inlineDeposit.amount) || 0;
+    const discAmt = parseFloat(inlineDeposit.discount) || 0;
+    if (depAmt <= 0 && discAmt <= 0) { toast('error', 'Enter an amount or a discount'); return; }
+    if (discAmt > 0 && inlineDeposit.discountReason.trim().length < 3) { toast('error', 'A reason (min 3 chars) is required for a discount'); return; }
     setInlineDepositSaving(true);
     try {
-      await api.post('/fees/ledger/deposit', {
-        studentIds: [id],
-        month: inlineDeposit.month,
-        amount: parseFloat(inlineDeposit.amount),
-        paymentMethod: inlineDeposit.paymentMethod,
-        receivedBy: inlineDeposit.receivedBy || undefined,
-        entryDate: inlineDeposit.date || undefined,
-      });
+      if (depAmt > 0) {
+        await api.post('/fees/ledger/deposit', {
+          studentIds: [id],
+          month: inlineDeposit.month,
+          amount: depAmt,
+          paymentMethod: inlineDeposit.paymentMethod,
+          receivedBy: inlineDeposit.receivedBy || undefined,
+          entryDate: inlineDeposit.date || undefined,
+        });
+      }
+      if (discAmt > 0) {
+        await api.post('/fees/ledger/discount', {
+          studentId: id, month: inlineDeposit.month, amount: discAmt,
+          category: 'AD_HOC', reason: inlineDeposit.discountReason.trim(),
+        });
+      }
       const label = new Date(inlineDeposit.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-      toast('success', `Deposit recorded for ${label}`);
+      toast('success', discAmt > 0 ? `Recorded for ${label} — ${formatCurrency(depAmt)} paid, ${formatCurrency(discAmt)} discount` : `Deposit recorded for ${label}`);
       setInlineDeposit(null);
       loadLedger();
     } catch (err: any) {
@@ -701,6 +746,17 @@ export default function StudentProfilePage() {
     <div class="field"><div class="label">Balance Before</div><div class="value">${fmt(data.balanceBeforeDeposit)}</div></div>
   </div>
 
+  ${Array.isArray(data.deposit.breakdown) && data.deposit.breakdown.length ? `
+    <h3>Payment Breakdown</h3>
+    <table>
+      <thead><tr><th>For</th><th style="text-align:right;width:30%">Amount</th></tr></thead>
+      <tbody>
+        ${data.deposit.breakdown.map((b: any) => `<tr><td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1">${b.label}</td><td style="padding:6px 12px;font-size:12px;border:1px solid #cbd5e1;text-align:right;font-weight:600">${fmt(b.amount)}</td></tr>`).join('')}
+        <tr class="total-row"><td style="padding:8px 12px;border:1px solid #cbd5e1;font-size:14px">Total</td><td style="padding:8px 12px;border:1px solid #cbd5e1;text-align:right;font-size:14px">${fmt(data.deposit.amount)}</td></tr>
+      </tbody>
+    </table>
+  ` : ''}
+
   ${allocationRows ? `
     <h3>Applied To Charges (FIFO)</h3>
     <table>
@@ -732,7 +788,10 @@ export default function StudentProfilePage() {
   const handleOpeningBalance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (chargeSaving) return; // guard against double-submit
-    const month = openingForm.month || (openingForm.year.split('-')[0] + '-04'); // default to April of first year
+    // Default to April of the session's first year. Robust to a free-typed
+    // session ("2019-2020", "2019", etc.) — grab the first 4-digit year, else now.
+    const startYear = (openingForm.year.match(/\d{4}/) || [String(new Date().getFullYear())])[0];
+    const month = openingForm.month || `${startYear}-04`;
     const charged = parseFloat(openingForm.amount) || 0;
     const paid = parseFloat(openingForm.paidAmount) || 0;
     setChargeSaving(true);
@@ -1010,6 +1069,85 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
   <div class="sub">${s?.name || ''} · ${s?.class || ''}${s?.section ? ' - ' + s.section : ''} · Adm. No. ${s?.admissionNo || ''} · ${txns.length} purchase${txns.length === 1 ? '' : 's'} · Printed ${new Date().toLocaleDateString('en-IN')}</div>
   ${blocks || '<p style="color:#64748b">No purchases recorded.</p>'}
   <div class="grand"><span>GRAND TOTAL — ${txns.length} purchase${txns.length === 1 ? '' : 's'}</span><span>Billed ${fmt(gNet)} &nbsp;·&nbsp; Paid ${fmt(gPaid)} &nbsp;·&nbsp; ${gNet - gPaid > 0 ? 'Due ' + fmt(gNet - gPaid) : 'All settled'}</span></div>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  };
+
+  // Year-end fee statement (bank-statement style) for one academic year (Apr–Mar).
+  // Opening balance carried in + every charge/deposit dated within the year +
+  // running balance + closing balance. Print dialog → "Save as PDF".
+  const printAnnualStatement = (ayStartYear: number) => {
+    if (!ledgerData) return;
+    const s = ledgerData.student;
+    const fmt = (n: number) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const startKey = `${ayStartYear}-04`;
+    const endKey = `${ayStartYear + 1}-03`;
+    const inYear = (m: string) => m >= startKey && m <= endKey;
+
+    const all = (ledgerData.entries || [])
+      .filter((e: any) => !e.voidedAt)
+      .slice()
+      .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.month.localeCompare(b.month));
+
+    // Opening balance = running balance of everything dated before this year
+    let opening = 0;
+    const rows: any[] = [];
+    for (const e of all) {
+      const delta = e.type === 'CHARGE' ? e.amount : -e.amount; // DEPOSIT/DISCOUNT reduce
+      if (inYear(e.month)) rows.push(e);
+      else if (e.month < startKey) opening += delta;
+    }
+
+    let running = opening;
+    let totCharge = 0, totPaid = 0;
+    const body = rows.map((e: any) => {
+      const isChg = e.type === 'CHARGE';
+      if (isChg) { running += e.amount; totCharge += e.amount; } else { running -= e.amount; totPaid += e.amount; }
+      return `<tr>
+        <td style="padding:5px 8px;border:1px solid #e2e8f0;white-space:nowrap">${new Date(e.date).toLocaleDateString('en-IN')}</td>
+        <td style="padding:5px 8px;border:1px solid #e2e8f0">${e.description}${e.receiptNumber ? ` <span style="color:#94a3b8">· ${e.receiptNumber}</span>` : ''}</td>
+        <td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;color:#b45309">${isChg ? fmt(e.amount) : ''}</td>
+        <td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;color:#15803d">${!isChg ? fmt(e.amount) : ''}</td>
+        <td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:600">${fmt(running)}</td>
+      </tr>`;
+    }).join('');
+    const closing = running;
+
+    const html = `<!DOCTYPE html><html><head><title>Fee Statement ${ayStartYear}-${ayStartYear + 1} — ${s?.name || ''}</title>
+<style>body{font-family:Arial,sans-serif;margin:22px;color:#1e293b;font-size:13px}
+.header{text-align:center;border-bottom:3px solid #1e40af;padding-bottom:10px;margin-bottom:14px}
+.school{font-size:20px;font-weight:bold;color:#1e40af}
+.title{font-size:14px;font-weight:bold;margin-top:6px}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:2px 24px;font-size:12px;margin-bottom:14px}
+.meta .l{color:#64748b}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase}
+.open td,.close td{background:#f1f5f9;font-weight:bold}
+.tot td{background:#dcfce7;font-weight:bold;font-size:13px}
+@media print{body{margin:10px}}</style></head>
+<body>
+  <div class="header">
+    <div class="school">PATHAK EDUCATIONAL FOUNDATION SCHOOL</div>
+    <div style="font-size:11px;color:#666">Salarpur, Sector - 101 | Ph: 6397339902</div>
+    <div class="title">FEE STATEMENT — Academic Year ${ayStartYear}-${ayStartYear + 1}</div>
+  </div>
+  <div class="meta">
+    <div><span class="l">Student:</span> <b>${s?.name || ''}</b></div>
+    <div><span class="l">Admission No:</span> ${s?.admissionNo || ''}</div>
+    <div><span class="l">Class:</span> ${s?.class || ''}${s?.section ? ' - ' + s.section : ''}</div>
+    <div><span class="l">Printed:</span> ${new Date().toLocaleDateString('en-IN')}</div>
+  </div>
+  <table>
+    <thead><tr><th>Date</th><th>Particulars</th><th style="text-align:right">Charge</th><th style="text-align:right">Paid</th><th style="text-align:right">Balance</th></tr></thead>
+    <tbody>
+      <tr class="open"><td colspan="4">Opening balance (brought forward)</td><td style="text-align:right">${fmt(opening)}</td></tr>
+      ${body || '<tr><td colspan="5" style="padding:10px;text-align:center;color:#64748b">No entries this year.</td></tr>'}
+      <tr class="tot"><td colspan="2">TOTALS</td><td style="text-align:right">${fmt(totCharge)}</td><td style="text-align:right">${fmt(totPaid)}</td><td></td></tr>
+      <tr class="close"><td colspan="4">Closing balance ${closing > 0 ? '(due)' : '(clear)'}</td><td style="text-align:right;color:${closing > 0 ? '#dc2626' : '#15803d'}">${fmt(closing)}</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:24px;font-size:11px;color:#64748b">This is a computer-generated statement. Charge = fees billed, Paid = deposits/discounts. Balance is the running amount owed.</p>
 </body></html>`;
     const w = window.open('', '_blank');
     if (w) { w.document.write(html); w.document.close(); w.print(); }
@@ -2334,9 +2472,34 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                     Opening Balance
                   </button>
                   {ledgerData?.ledger?.length > 0 && (
-                    <button onClick={handlePrintLedger} className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800 ml-auto">
-                      <Printer className="h-3.5 w-3.5" /> Print Ledger
-                    </button>
+                    <div className="flex items-center gap-2 ml-auto">
+                      {(() => {
+                        // Academic years present in the ledger (Apr–Mar), newest first
+                        const years = Array.from(new Set<number>((ledgerData.entries || []).filter((e: any) => !e.voidedAt).map((e: any) => {
+                          const [y, m] = e.month.split('-').map(Number);
+                          return m >= 4 ? y : y - 1;
+                        }))).sort((a: number, b: number) => b - a);
+                        const now = new Date();
+                        const curAy = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+                        if (years.length === 0) years.push(curAy);
+                        const sel = statementYear ?? years[0];
+                        return (
+                          <>
+                            <select value={sel} onChange={e => setStatementYear(parseInt(e.target.value, 10))}
+                              className="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900">
+                              {years.map(y => <option key={y} value={y}>{y}-{y + 1}</option>)}
+                            </select>
+                            <button onClick={() => printAnnualStatement(sel)}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+                              <Printer className="h-3.5 w-3.5" /> Annual Statement
+                            </button>
+                          </>
+                        );
+                      })()}
+                      <button onClick={handlePrintLedger} className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-800">
+                        <Printer className="h-3.5 w-3.5" /> Print Ledger
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -2406,10 +2569,20 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                       </select>
                     </label>
                     <label className="text-xs text-purple-700">
-                      Academic year
-                      <select value={openingForm.year} onChange={e => setOpeningForm({...openingForm, year: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                        {['2020-2021', '2021-2022', '2022-2023', '2023-2024', '2024-2025', '2025-2026'].map(y => <option key={y} value={y}>{y}</option>)}
-                      </select>
+                      Academic session
+                      <input list="opening-session-options" value={openingForm.year}
+                        onChange={e => setOpeningForm({...openingForm, year: e.target.value})}
+                        placeholder="e.g. 2019-2020"
+                        className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      <datalist id="opening-session-options">
+                        {(() => {
+                          const now = new Date();
+                          const cy = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+                          const opts: string[] = [];
+                          for (let y = cy + 1; y >= cy - 12; y--) opts.push(`${y}-${y + 1}`);
+                          return opts.map(y => <option key={y} value={y} />);
+                        })()}
+                      </datalist>
                     </label>
                     <label className="text-xs text-purple-700">
                       Month (optional)
@@ -2472,7 +2645,7 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
               {showDepositForm && (
                 <form onSubmit={handleDeposit} className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-3">
                   <h3 className="text-sm font-semibold text-green-800">Record Deposit</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <label className="text-xs text-slate-600">
                       Payment date
                       <input type="date" value={depositForm.date} onChange={e => setDepositForm({...depositForm, date: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
@@ -2482,8 +2655,8 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                       <input type="month" value={depositForm.month} onChange={e => setDepositForm({...depositForm, month: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                     </label>
                     <label className="text-xs text-slate-600">
-                      Amount (₹)
-                      <input type="number" placeholder="0" value={depositForm.amount} onChange={e => setDepositForm({...depositForm, amount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                      Amount paid (₹)
+                      <input type="number" placeholder="0" value={depositForm.amount} onChange={e => setDepositForm({...depositForm, amount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                     </label>
                     <label className="text-xs text-slate-600">
                       Method
@@ -2495,10 +2668,69 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                       Received by
                       <input placeholder="name" value={depositForm.receivedBy} onChange={e => setDepositForm({...depositForm, receivedBy: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
                     </label>
-                    <div className="flex gap-2 items-end">
-                      <button type="submit" disabled={depositSaving} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">{depositSaving ? 'Saving…' : 'Save'}</button>
-                      <button type="button" onClick={() => setShowDepositForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                  </div>
+
+                  {/* Optional breakdown of what the payment is for (single student) */}
+                  {!(ledgerFamily && (ledgerData?.siblings?.length || 0) > 1) && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-blue-800">Payment breakdown (optional — e.g. Books ₹2000, Copy ₹1000, Fees ₹2000)</p>
+                        <button type="button" onClick={() => setDepositBreakdown([...depositBreakdown, { label: '', amount: '' }])}
+                          className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">+ Add line</button>
+                      </div>
+                      {depositBreakdown.length > 0 && (
+                        <div className="space-y-2">
+                          {depositBreakdown.map((l, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <input placeholder="For (e.g. Books, Copy, Previous Balance, Rest fees)" value={l.label}
+                                onChange={e => setDepositBreakdown(depositBreakdown.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                                className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                              <input type="number" placeholder="₹" value={l.amount}
+                                onChange={e => setDepositBreakdown(depositBreakdown.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                                className="w-28 px-3 py-1.5 border border-slate-300 rounded-lg text-right text-sm text-slate-900" />
+                              <button type="button" onClick={() => setDepositBreakdown(depositBreakdown.filter((_, j) => j !== i))}
+                                className="p-1 text-red-500 hover:text-red-700"><X className="h-4 w-4" /></button>
+                            </div>
+                          ))}
+                          {(() => {
+                            const bdSum = depositBreakdown.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
+                            const dep = parseFloat(depositForm.amount) || 0;
+                            const ok = Math.abs(bdSum - dep) <= 0.5;
+                            return (
+                              <p className={`text-xs text-right font-medium ${ok ? 'text-green-700' : 'text-red-600'}`}>
+                                Breakdown {formatCurrency(bdSum)} / {formatCurrency(dep)} paid {ok ? '✓' : '— must match'}
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
+                  )}
+
+                  {/* Optional discount applied alongside the deposit */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-amber-800 mb-2">Discount (optional — concession/waiver, reduces balance but isn&apos;t cash)</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="text-xs text-slate-600">
+                        Discount (₹)
+                        <input type="number" placeholder="0" value={depositForm.discount} onChange={e => setDepositForm({...depositForm, discount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Type
+                        <select value={depositForm.discountCategory} onChange={e => setDepositForm({...depositForm, discountCategory: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                          {[['SIBLING_DISCOUNT', 'Sibling'], ['MERIT_DISCOUNT', 'Merit'], ['FEE_WAIVER', 'Waiver'], ['AD_HOC', 'Other']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Reason {parseFloat(depositForm.discount) > 0 && <span className="text-red-500">*</span>}
+                        <input placeholder="e.g. sibling concession, approved by principal" value={depositForm.discountReason} onChange={e => setDepositForm({...depositForm, discountReason: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setShowDepositForm(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                    <button type="submit" disabled={depositSaving} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">{depositSaving ? 'Saving…' : 'Save'}</button>
                   </div>
                 </form>
               )}
@@ -2881,6 +3113,21 @@ th{background:#1e40af;color:#fff;padding:8px 12px;text-align:left;font-size:11px
                                         onChange={ev => setInlineDeposit({ ...dep, receivedBy: ev.target.value })}
                                         className="mt-1 block w-36 px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900" />
                                     </label>
+                                    <label className="text-xs text-amber-700">
+                                      Discount (₹)
+                                      <input type="number" placeholder="0" value={dep.discount}
+                                        onChange={ev => setInlineDeposit({ ...dep, discount: ev.target.value })}
+                                        className="mt-1 block w-24 px-3 py-1.5 border border-amber-300 rounded-lg text-sm text-slate-900" />
+                                    </label>
+                                    {parseFloat(dep.discount) > 0 && (
+                                      <label className="text-xs text-amber-700">
+                                        Discount reason *
+                                        <input value={dep.discountReason}
+                                          onChange={ev => setInlineDeposit({ ...dep, discountReason: ev.target.value })}
+                                          placeholder="e.g. sibling, waiver"
+                                          className="mt-1 block w-44 px-3 py-1.5 border border-amber-300 rounded-lg text-sm text-slate-900" />
+                                      </label>
+                                    )}
                                     <button type="submit" disabled={inlineDepositSaving}
                                       className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
                                       {inlineDepositSaving ? 'Saving…' : 'Save Deposit'}

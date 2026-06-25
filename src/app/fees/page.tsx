@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { Plus, CreditCard, Receipt, Search, Users, IndianRupee, Printer, X, BookOpen, ChevronDown, ChevronUp, AlertTriangle, CalendarPlus } from 'lucide-react';
+import { Plus, CreditCard, Receipt, Search, Users, IndianRupee, Printer, X, BookOpen, ChevronDown, ChevronUp, AlertTriangle, CalendarPlus, Percent } from 'lucide-react';
 
 const FEE_TYPES = ['TUITION', 'TRANSPORT', 'ANNUAL', 'LAB', 'SPORTS', 'LIBRARY', 'MISC', 'FINE'];
 const PAYMENT_METHODS = ['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'DD'];
@@ -107,6 +107,12 @@ export default function FeesPage() {
   const [addLateFee, setAddLateFee] = useState(false);
   const [lateFeeAmount, setLateFeeAmount] = useState('');
   const [lateFeePerStudent, setLateFeePerStudent] = useState<Record<string, string>>({});
+  // Discount (concession/waiver) applied at collection
+  const [addDiscount, setAddDiscount] = useState(false);
+  const [discountAmount, setDiscountAmount] = useState('');
+  const [discountPerStudent, setDiscountPerStudent] = useState<Record<string, string>>({});
+  const [discountReason, setDiscountReason] = useState('');
+  const [discountCategory, setDiscountCategory] = useState('AD_HOC');
 
   useEffect(() => {
     Promise.all([
@@ -259,9 +265,20 @@ export default function FeesPage() {
     : lateFeeAmt;
   const grandTotal = effectiveTotal + totalLateFee;
 
+  // Discount computation
+  const discountAmt = parseFloat(discountAmount) || 0;
+  const totalDiscount = selectedStudents.length > 1
+    ? selectedStudents.reduce((sum, s) => sum + (parseFloat(discountPerStudent[s.id]) || 0), 0)
+    : discountAmt;
+
   // Handle deposit — records to fee ledger for each student
   const handleCollect = async () => {
-    if (selectedStudents.length === 0 || effectiveTotal <= 0) return;
+    if (selectedStudents.length === 0) return;
+    if (effectiveTotal <= 0 && !(addDiscount && totalDiscount > 0)) return; // need cash or a discount
+    if (addDiscount && totalDiscount > 0 && discountReason.trim().length < 3) {
+      alert('A reason (min 3 chars) is required for a discount');
+      return;
+    }
     setSubmitting(true);
 
     try {
@@ -299,29 +316,51 @@ export default function FeesPage() {
         }
       }
 
-      // Step 2: Record deposit
-      const payload: any = {
-        studentIds,
-        month: depositMonth,
-        amount: effectiveTotal,
-        paymentMethod,
-        receivedBy: receivedBy || undefined,
-      };
+      // Step 2: Record deposit (skip if this is a discount-only collection)
+      let data: any = null;
+      if (effectiveTotal > 0) {
+        const payload: any = {
+          studentIds,
+          month: depositMonth,
+          amount: effectiveTotal,
+          paymentMethod,
+          receivedBy: receivedBy || undefined,
+        };
 
-      if (isMultiple && splitMode === 'custom') {
-        payload.perStudentAmounts = {};
-        for (const s of selectedStudents) {
-          payload.perStudentAmounts[s.id] = parseFloat(perStudentAmounts[s.id]) || 0;
+        if (isMultiple && splitMode === 'custom') {
+          payload.perStudentAmounts = {};
+          for (const s of selectedStudents) {
+            payload.perStudentAmounts[s.id] = parseFloat(perStudentAmounts[s.id]) || 0;
+          }
+          payload.splitEvenly = false;
+        } else if (isMultiple) {
+          payload.splitEvenly = true;
         }
-        payload.splitEvenly = false;
-      } else if (isMultiple) {
-        payload.splitEvenly = true;
+
+        const res = await api.post('/fees/ledger/deposit', payload);
+        data = res.data;
       }
 
-      const { data } = await api.post('/fees/ledger/deposit', payload);
+      // Step 3: Record discount (concession/waiver) per student
+      let discountApplied = 0;
+      if (addDiscount && totalDiscount > 0) {
+        for (const s of selectedStudents) {
+          const disc = isMultiple ? (parseFloat(discountPerStudent[s.id]) || 0) : discountAmt;
+          if (disc > 0) {
+            await api.post('/fees/ledger/discount', {
+              studentId: s.id,
+              month: depositMonth,
+              amount: disc,
+              category: discountCategory,
+              reason: discountReason.trim(),
+            });
+            discountApplied += disc;
+          }
+        }
+      }
 
       setLastReceipt({
-        ...data,
+        ...(data || {}),
         students: selectedStudents,
         totalBalance,
         depositAmt: effectiveTotal,
@@ -329,6 +368,8 @@ export default function FeesPage() {
         splitMode,
         lateFeeCharged,
         lateFeePerStudent: isMultiple ? { ...lateFeePerStudent } : null,
+        discountApplied,
+        discountReason: discountApplied > 0 ? discountReason.trim() : null,
       });
 
       // Reset
@@ -343,6 +384,11 @@ export default function FeesPage() {
       setAddLateFee(false);
       setLateFeeAmount('');
       setLateFeePerStudent({});
+      setAddDiscount(false);
+      setDiscountAmount('');
+      setDiscountPerStudent({});
+      setDiscountReason('');
+      setDiscountCategory('AD_HOC');
 
       // Refresh payments
       const pRes = await api.get('/fees/payments');
@@ -392,7 +438,12 @@ export default function FeesPage() {
           <tr style="background:#f1f5f9"><td><strong>Total Collected</strong></td><td style="text-align:right;font-weight:bold;font-size:16px">₹${(r.depositAmt + r.lateFeeCharged).toLocaleString('en-IN')}</td></tr>
         </table>
       ` : ''}
-      <div class="total">Amount Paid: ₹${(r.depositAmt + (r.lateFeeCharged || 0)).toLocaleString('en-IN')}</div>
+      ${r.discountApplied > 0 ? `
+        <table class="info-table" style="margin:8px 0">
+          <tr><td style="color:#6d28d9"><strong>Discount${r.discountReason ? ' (' + r.discountReason + ')' : ''}</strong></td><td style="text-align:right;color:#6d28d9;font-weight:bold">− ₹${r.discountApplied.toLocaleString('en-IN')}</td></tr>
+        </table>
+      ` : ''}
+      <div class="total">Amount Paid: ₹${(r.depositAmt + (r.lateFeeCharged || 0)).toLocaleString('en-IN')}${r.discountApplied > 0 ? ` + ₹${r.discountApplied.toLocaleString('en-IN')} discount` : ''}</div>
       <div style="margin-top:40px;display:flex;justify-content:space-between;font-size:12px">
         <div style="border-top:1px solid #000;width:180px;text-align:center;padding-top:4px">Parent Signature</div>
         <div style="border-top:1px solid #000;width:180px;text-align:center;padding-top:4px">Accountant</div>
@@ -1042,8 +1093,62 @@ export default function FeesPage() {
                         </div>
                       )}
 
+                      {/* Discount option */}
+                      {selectedStudents.length > 0 && totalBalance > 0 && (
+                        <div className={`rounded-xl border-2 transition-all ${addDiscount ? 'border-violet-400 bg-violet-50' : 'border-dashed border-slate-200 bg-white'}`}>
+                          <button onClick={() => { setAddDiscount(!addDiscount); if (addDiscount) { setDiscountAmount(''); setDiscountPerStudent({}); setDiscountReason(''); } }}
+                            className="w-full flex items-center justify-between px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <Percent className={`h-4 w-4 ${addDiscount ? 'text-violet-600' : 'text-slate-400'}`} />
+                              <span className={`text-xs font-medium ${addDiscount ? 'text-violet-800' : 'text-slate-500'}`}>Add Discount</span>
+                            </div>
+                            <div className={`w-8 h-4.5 rounded-full transition-colors ${addDiscount ? 'bg-violet-500' : 'bg-slate-200'} relative`}>
+                              <div className={`w-3.5 h-3.5 rounded-full bg-white shadow absolute top-[2px] transition-all ${addDiscount ? 'right-[2px]' : 'left-[2px]'}`} />
+                            </div>
+                          </button>
+                          {addDiscount && (
+                            <div className="px-3 pb-3 space-y-2">
+                              {selectedStudents.length === 1 ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-violet-600">₹</span>
+                                  <input type="number" placeholder="Discount amount" value={discountAmount}
+                                    onChange={e => setDiscountAmount(e.target.value)}
+                                    className="flex-1 px-2 py-1.5 border border-violet-300 rounded-lg text-sm font-bold text-slate-900 text-right focus:ring-2 focus:ring-violet-400 outline-none" />
+                                </div>
+                              ) : (
+                                <div className="space-y-1.5">
+                                  {selectedStudents.map(s => (
+                                    <div key={s.id} className="flex items-center gap-2">
+                                      <span className="text-[10px] text-violet-700 flex-1 truncate">{s.user.firstName}</span>
+                                      <span className="text-[10px] text-violet-500">₹</span>
+                                      <input type="number" placeholder="0"
+                                        value={discountPerStudent[s.id] || ''}
+                                        onChange={e => setDiscountPerStudent(prev => ({ ...prev, [s.id]: e.target.value }))}
+                                        className="w-16 px-2 py-1 border border-violet-300 rounded text-xs font-bold text-slate-900 text-right" />
+                                    </div>
+                                  ))}
+                                  <div className="flex justify-between text-xs font-bold text-violet-800 pt-1 border-t border-violet-200">
+                                    <span>Total Discount</span>
+                                    <span>{formatCurrency(totalDiscount)}</span>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="grid grid-cols-2 gap-2">
+                                <select value={discountCategory} onChange={e => setDiscountCategory(e.target.value)}
+                                  className="px-2 py-1.5 border border-violet-300 rounded-lg text-xs text-slate-900">
+                                  {[['SIBLING_DISCOUNT', 'Sibling'], ['MERIT_DISCOUNT', 'Merit'], ['FEE_WAIVER', 'Waiver'], ['AD_HOC', 'Other']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                </select>
+                                <input placeholder="Reason *" value={discountReason} onChange={e => setDiscountReason(e.target.value)}
+                                  className="px-2 py-1.5 border border-violet-300 rounded-lg text-xs text-slate-900" />
+                              </div>
+                              <p className="text-[10px] text-violet-500">Reduces balance but isn&apos;t counted as cash collected. Requires a reason (audited).</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Payment summary */}
-                      {effectiveTotal > 0 && selectedStudents.length > 0 && (
+                      {(effectiveTotal > 0 || (addDiscount && totalDiscount > 0)) && selectedStudents.length > 0 && (
                         <div className="bg-white rounded-xl p-3 text-sm space-y-1.5">
                           {selectedStudents.length > 1 && (
                             <>
@@ -1088,10 +1193,16 @@ export default function FeesPage() {
                               <span className="text-slate-900">{formatCurrency(grandTotal)}</span>
                             </div>
                           )}
+                          {addDiscount && totalDiscount > 0 && (
+                            <div className="flex justify-between text-xs">
+                              <span className="text-violet-600 font-medium">− Discount</span>
+                              <span className="text-violet-700 font-bold">{formatCurrency(totalDiscount)}</span>
+                            </div>
+                          )}
                           <div className="flex justify-between">
                             <span className="text-slate-500 text-xs">Balance after</span>
-                            <span className={`font-bold ${totalBalance + totalLateFee - effectiveTotal > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {formatCurrency(Math.max(totalBalance + totalLateFee - effectiveTotal, 0))}
+                            <span className={`font-bold ${totalBalance + totalLateFee - effectiveTotal - totalDiscount > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {formatCurrency(Math.max(totalBalance + totalLateFee - effectiveTotal - totalDiscount, 0))}
                             </span>
                           </div>
                         </div>
@@ -1099,8 +1210,8 @@ export default function FeesPage() {
 
                       {/* Submit */}
                       <Button className="w-full" variant="success" size="lg" onClick={handleCollect}
-                        disabled={submitting || selectedStudents.length === 0 || effectiveTotal <= 0}>
-                        {submitting ? 'Processing...' : `Record Payment ${grandTotal > 0 ? formatCurrency(grandTotal) : ''}`}
+                        disabled={submitting || selectedStudents.length === 0 || (effectiveTotal <= 0 && !(addDiscount && totalDiscount > 0))}>
+                        {submitting ? 'Processing...' : `Record Payment ${grandTotal > 0 ? formatCurrency(grandTotal) : (totalDiscount > 0 ? formatCurrency(totalDiscount) + ' discount' : '')}`}
                       </Button>
                     </CardContent>
                   </Card>
