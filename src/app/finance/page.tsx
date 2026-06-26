@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { Plus, Trash2, IndianRupee, TrendingUp, TrendingDown, Wallet, CheckCircle } from 'lucide-react';
+import { Plus, Trash2, IndianRupee, TrendingUp, TrendingDown, Wallet, CheckCircle, ArrowRight } from 'lucide-react';
 
 const EXPENSE_CATEGORIES = [
   'SALARY', 'INFRASTRUCTURE', 'UTILITIES', 'STATIONERY', 'TRANSPORT',
@@ -31,6 +32,7 @@ const categoryColors: Record<string, string> = {
 export default function FinancePage() {
   const [tab, setTab] = useState<'overview' | 'expenses' | 'salaries'>('overview');
   const [summary, setSummary] = useState<any>(null);
+  const [feeFinance, setFeeFinance] = useState<any>(null);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [salaries, setSalaries] = useState<any[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
@@ -54,6 +56,7 @@ export default function FinancePage() {
   useEffect(() => {
     Promise.all([
       api.get('/finance/summary').then(r => setSummary(r.data)),
+      api.get('/fee-reports/ledger-finance').then(r => setFeeFinance(r.data)).catch(() => {}),
       api.get('/finance/expenses').then(r => setExpenses(r.data)),
       api.get('/finance/salaries').then(r => setSalaries(r.data)),
       api.get('/teachers').then(r => setTeachers(r.data)),
@@ -155,7 +158,7 @@ export default function FinancePage() {
         ) : (
           <>
             {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="bg-white rounded-xl border border-slate-200 p-5">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
@@ -216,6 +219,18 @@ export default function FinancePage() {
                   </div>
                 </div>
               </div>
+              <div className="bg-white rounded-xl border border-slate-200 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center">
+                    <TrendingDown className="h-5 w-5 text-amber-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Outstanding Dues</p>
+                    <p className="text-lg font-bold text-amber-600">{formatCurrency(feeFinance?.totals?.outstanding || 0)}</p>
+                    {feeFinance?.counts?.defaulters > 0 && <p className="text-[11px] text-slate-400">{feeFinance.counts.defaulters} students</p>}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Tabs */}
@@ -233,6 +248,57 @@ export default function FinancePage() {
 
             {/* OVERVIEW TAB */}
             {tab === 'overview' && summary && (
+              <div className="space-y-6">
+              {/* Fee collection (from the ledger) */}
+              {feeFinance && (
+                <div className="bg-white rounded-xl border border-slate-200 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold">Fee Collection</h2>
+                    <Link href="/fee-reports/ledger-finance" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                      Full report <ArrowRight className="h-3 w-3" />
+                    </Link>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                    <div>
+                      <p className="text-xs text-slate-500">Billed</p>
+                      <p className="text-xl font-bold text-slate-900">{formatCurrency(feeFinance.totals.billed)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Collected</p>
+                      <p className="text-xl font-bold text-green-600">{formatCurrency(feeFinance.totals.collected)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Discounts</p>
+                      <p className="text-xl font-bold text-violet-600">{formatCurrency(feeFinance.totals.discount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Scholarships</p>
+                      <p className="text-xl font-bold text-cyan-600">{formatCurrency(feeFinance.totals.scholarship || 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Outstanding</p>
+                      <p className="text-xl font-bold text-amber-600">{formatCurrency(feeFinance.totals.outstanding)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Collection Rate</p>
+                      <p className={`text-xl font-bold ${feeFinance.totals.collectionRate >= 80 ? 'text-green-600' : feeFinance.totals.collectionRate >= 60 ? 'text-amber-600' : 'text-red-600'}`}>{feeFinance.totals.collectionRate}%</p>
+                    </div>
+                  </div>
+                  {/* Collected vs billed bar */}
+                  <div className="mt-4">
+                    <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden flex">
+                      <div className="bg-green-500 h-full" style={{ width: `${feeFinance.totals.billed > 0 ? (feeFinance.totals.collected / feeFinance.totals.billed) * 100 : 0}%` }} title="Collected" />
+                      <div className="bg-violet-400 h-full" style={{ width: `${feeFinance.totals.billed > 0 ? (feeFinance.totals.discount / feeFinance.totals.billed) * 100 : 0}%` }} title="Discount" />
+                    </div>
+                    <div className="flex gap-4 mt-2 text-xs text-slate-500">
+                      <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded" /> Collected</span>
+                      <span className="flex items-center gap-1"><span className="w-3 h-3 bg-violet-400 rounded" /> Discount</span>
+                      <span className="flex items-center gap-1"><span className="w-3 h-3 bg-slate-200 rounded" /> Outstanding</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Monthly Income vs Expenses bar chart */}
                 <div className="bg-white rounded-xl border border-slate-200 p-6">
@@ -294,6 +360,7 @@ export default function FinancePage() {
                     </div>
                   )}
                 </div>
+              </div>
               </div>
             )}
 

@@ -50,6 +50,7 @@ const adminMenu = [
   { label: 'Scholarship', href: '/scholarship', icon: Sparkles, scope: 'scholarship' },
   { label: 'Fee Reports', href: '/fee-reports', icon: BarChart3, scope: 'reports' },
   { label: 'Collection Dashboard', href: '/fee-reports/dashboard', icon: TrendingUp, scope: 'reports' },
+  { label: 'Fee Ledger Finance', href: '/fee-reports/ledger-finance', icon: IndianRupee, scope: 'reports' },
   { label: 'Audit Log', href: '/fee-reports/audit-log', icon: Shield, scope: 'reports' },
   { label: 'Report Card', href: '/report-card', icon: Printer, scope: 'reportcard' },
   { label: 'Report Card Maker', href: '/report-card-maker', icon: FileText, scope: 'reportcard' },

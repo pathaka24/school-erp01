@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
+import { useFeedback } from '@/components/ui/feedback';
 import { Sparkles, TrendingUp } from 'lucide-react';
 
 const TIER_COLORS: Record<string, string> = {
@@ -17,11 +18,16 @@ const TIER_COLORS: Record<string, string> = {
 const TIER_PCT: Record<string, number> = { DIAMOND: 25, GOLD: 15, SILVER: 10, BRONZE: 5, NONE: 0 };
 
 export default function ScholarshipPage() {
+  const { toast } = useFeedback();
   const [students, setStudents] = useState<any[]>([]);
   const [selectedStudent, setSelectedStudent] = useState('');
   const [walletData, setWalletData] = useState<any>(null);
   const [ledger, setLedger] = useState<any[]>([]);
   const [tab, setTab] = useState<'wallet' | 'ledger' | 'calculator' | 'advisor'>('wallet');
+  // Apply scholarship to fees
+  const [feeBalance, setFeeBalance] = useState<number | null>(null);
+  const [applyForm, setApplyForm] = useState({ amount: '', reason: '', month: '', allowUnpaid: false });
+  const [applying, setApplying] = useState(false);
 
   // Calculator
   const [calcExam, setCalcExam] = useState('75');
@@ -33,12 +39,37 @@ export default function ScholarshipPage() {
     api.get('/students').then(r => setStudents(r.data));
   }, []);
 
+  const loadStudentScholarship = (sid: string) => {
+    api.get(`/scholarship/wallet/${sid}`).then(r => setWalletData(r.data));
+    api.get(`/scholarship/ledger/${sid}`).then(r => setLedger(r.data));
+    api.get(`/fees/ledger/${sid}`).then(r => setFeeBalance(r.data.currentBalance)).catch(() => setFeeBalance(null));
+  };
+
   useEffect(() => {
-    if (selectedStudent) {
-      api.get(`/scholarship/wallet/${selectedStudent}`).then(r => setWalletData(r.data));
-      api.get(`/scholarship/ledger/${selectedStudent}`).then(r => setLedger(r.data));
-    }
+    if (selectedStudent) loadStudentScholarship(selectedStudent);
   }, [selectedStudent]);
+
+  const applyScholarship = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(applyForm.amount);
+    if (!amt || amt <= 0) { toast('error', 'Enter a scholarship amount'); return; }
+    setApplying(true);
+    try {
+      const { data } = await api.post(`/scholarship/apply-to-fees/${selectedStudent}`, {
+        amount: amt,
+        reason: applyForm.reason || undefined,
+        month: applyForm.month || undefined,
+        allowUnpaid: applyForm.allowUnpaid,
+      });
+      toast('success', `${formatCurrency(amt)} scholarship applied — fee balance now ${formatCurrency(data.feeBalance)}`);
+      setApplyForm({ amount: '', reason: '', month: '', allowUnpaid: false });
+      loadStudentScholarship(selectedStudent);
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to apply scholarship');
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const runCalculator = async () => {
     const r = await api.post('/scholarship/calculate', {
@@ -93,6 +124,40 @@ export default function ScholarshipPage() {
                     <p className="text-xs text-slate-500">Total Applied</p>
                   </div>
                 </div>
+
+                {/* Apply scholarship to fees */}
+                <form onSubmit={applyScholarship} className="bg-violet-50 border border-violet-200 rounded-xl p-5 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h3 className="text-sm font-semibold text-violet-800 flex items-center gap-2"><Sparkles className="h-4 w-4" /> Apply Scholarship to Fees</h3>
+                    {feeBalance != null && (
+                      <span className="text-xs text-slate-600">Current fee balance: <strong className={feeBalance > 0 ? 'text-red-600' : 'text-green-600'}>{formatCurrency(feeBalance)}</strong></span>
+                    )}
+                  </div>
+                  <p className="text-xs text-violet-600">Records a scholarship credit AND posts it as a discount in the fee ledger, reducing what the parent owes. <strong>Only allowed once the student has paid that month&apos;s fee.</strong></p>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <label className="text-xs text-slate-600">
+                      Amount (₹)
+                      <input type="number" placeholder="e.g. 1000" value={applyForm.amount} onChange={e => setApplyForm({ ...applyForm, amount: e.target.value })} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                    </label>
+                    <label className="text-xs text-slate-600 md:col-span-2">
+                      Reason
+                      <input placeholder="e.g. Merit scholarship, GOLD tier, principal approved" value={applyForm.reason} onChange={e => setApplyForm({ ...applyForm, reason: e.target.value })} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      Month (optional)
+                      <input type="month" value={applyForm.month} onChange={e => setApplyForm({ ...applyForm, month: e.target.value })} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                      <input type="checkbox" checked={applyForm.allowUnpaid} onChange={e => setApplyForm({ ...applyForm, allowUnpaid: e.target.checked })} />
+                      Override — apply even if the month&apos;s fee isn&apos;t paid
+                    </label>
+                    <button type="submit" disabled={applying} className="px-4 py-2 bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-700 disabled:opacity-50">
+                      {applying ? 'Applying…' : 'Apply to Fees'}
+                    </button>
+                  </div>
+                </form>
 
                 <div className="bg-white rounded-xl border border-slate-200 p-6">
                   <h3 className="text-sm font-medium text-slate-700 mb-3">Recent Transactions</h3>
