@@ -68,9 +68,17 @@ export default function StudentProfilePage() {
   const [depositForm, setDepositForm] = useState({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '', discount: '', discountCategory: 'AD_HOC', discountReason: '' });
   // Free-form "what this payment is for" lines (single-student deposits)
   const [depositBreakdown, setDepositBreakdown] = useState<{ label: string; amount: string }[]>([]);
+  // Per-sibling discount amounts in family view (studentId -> amount string)
+  const [discountPerSib, setDiscountPerSib] = useState<Record<string, string>>({});
   const [chargeForm, setChargeForm] = useState({ category: 'MONTHLY_FEE', description: '', amount: '', month: '', date: '' });
   // Family view: per-child charge amounts (studentId -> amount string)
   const [chargePerStudent, setChargePerStudent] = useState<Record<string, string>>({});
+  // Bulk charge: multiple lines across a month range
+  const [showBulkCharge, setShowBulkCharge] = useState(false);
+  const [bulkLines, setBulkLines] = useState<{ category: string; description: string; amount: string; frequency: string; perStudent: Record<string, string> }[]>([{ category: 'MONTHLY_FEE', description: '', amount: '', frequency: 'MONTHLY', perStudent: {} }]);
+  const [bulkRange, setBulkRange] = useState({ from: '', to: '' });
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const defaultFreq = (cat: string) => (cat === 'MONTHLY_FEE' ? 'MONTHLY' : 'ONCE');
   // Siblings (Parent Info tab)
   const [siblingsInfo, setSiblingsInfo] = useState<{ familyName: string | null; siblings: any[] } | null>(null);
   const [sibSearch, setSibSearch] = useState('');
@@ -300,11 +308,22 @@ export default function StudentProfilePage() {
       ? ledgerData.siblings.map((s: any) => s.id)
       : [id];
     const depAmt = parseFloat(depositForm.amount) || 0;
-    const discAmt = parseFloat(depositForm.discount) || 0;
-    if (depAmt <= 0 && discAmt <= 0) { toast('error', 'Enter a deposit amount, a discount, or both'); return; }
-    if (discAmt > 0 && depositForm.discountReason.trim().length < 3) { toast('error', 'A reason (min 3 chars) is required for a discount'); return; }
-    // Free-form breakdown (single-student only) — must total the paid amount
     const isFamilyDep = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+    // Discount: in family view pick which sibling(s) get how much; else single student
+    const discountEntries: { studentId: string; amount: number }[] = [];
+    if (isFamilyDep) {
+      for (const sib of ledgerData.siblings) {
+        const v = parseFloat(discountPerSib[sib.id]) || 0;
+        if (v > 0) discountEntries.push({ studentId: sib.id, amount: v });
+      }
+    } else {
+      const d = parseFloat(depositForm.discount) || 0;
+      if (d > 0) discountEntries.push({ studentId: id as string, amount: d });
+    }
+    const totalDisc = discountEntries.reduce((s, d) => s + d.amount, 0);
+    if (depAmt <= 0 && totalDisc <= 0) { toast('error', 'Enter a deposit amount, a discount, or both'); return; }
+    if (totalDisc > 0 && depositForm.discountReason.trim().length < 3) { toast('error', 'A reason (min 3 chars) is required for a discount'); return; }
+    // Free-form breakdown (single-student only) — must total the paid amount
     const bdLines = (!isFamilyDep ? depositBreakdown : [])
       .map(l => ({ label: l.label.trim(), amount: parseFloat(l.amount) || 0 }))
       .filter(l => l.label && l.amount > 0);
@@ -325,21 +344,20 @@ export default function StudentProfilePage() {
           breakdown: bdLines.length > 0 ? bdLines : undefined,
         });
       }
-      // Discount line(s) — separate DISCOUNT entry per student, reduces balance like a deposit
-      if (discAmt > 0) {
-        for (const sid of studentIds) {
-          await api.post('/fees/ledger/discount', {
-            studentId: sid, month, amount: discAmt,
-            category: depositForm.discountCategory,
-            reason: depositForm.discountReason.trim(),
-            entryDate: depositForm.date || undefined,
-          });
-        }
+      // Discount line(s) — one DISCOUNT entry per chosen student, reduces balance like a deposit
+      for (const d of discountEntries) {
+        await api.post('/fees/ledger/discount', {
+          studentId: d.studentId, month, amount: d.amount,
+          category: depositForm.discountCategory,
+          reason: depositForm.discountReason.trim(),
+          entryDate: depositForm.date || undefined,
+        });
       }
       setDepositForm({ amount: '', paymentMethod: 'CASH', receivedBy: '', month: '', date: '', discount: '', discountCategory: 'AD_HOC', discountReason: '' });
       setDepositBreakdown([]);
+      setDiscountPerSib({});
       setShowDepositForm(false);
-      toast('success', discAmt > 0 ? `Recorded — ${formatCurrency(depAmt)} paid, ${formatCurrency(discAmt)} discount` : 'Deposit recorded');
+      toast('success', totalDisc > 0 ? `Recorded — ${formatCurrency(depAmt)} paid, ${formatCurrency(totalDisc)} discount` : 'Deposit recorded');
       loadLedger();
     } catch (err: any) {
       toast('error', err.response?.data?.error || 'Failed to record deposit');
@@ -386,6 +404,35 @@ export default function StudentProfilePage() {
       toast('error', err.response?.data?.error || 'Failed to add charge');
     } finally {
       setChargeSaving(false);
+    }
+  };
+
+  const handleBulkCharge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bulkSaving) return;
+    const isFamily = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+    const lines = bulkLines
+      .map(l => ({ category: l.category, description: l.description.trim(), amount: parseFloat(l.amount) || 0, frequency: l.frequency, perStudent: isFamily ? l.perStudent : undefined }))
+      .filter(l => l.amount > 0 || (l.perStudent && Object.values(l.perStudent).some(v => parseFloat(v) > 0)));
+    if (lines.length === 0) { toast('error', 'Add at least one charge with an amount'); return; }
+    const from = bulkRange.from || currentMonth();
+    const to = bulkRange.to || from;
+    if (to < from) { toast('error', 'The "to" month is before the "from" month'); return; }
+    const studentIds = isFamily ? ledgerData.siblings.map((s: any) => s.id) : [id];
+    setBulkSaving(true);
+    try {
+      const { data } = await api.post('/fees/ledger/multi-charge', {
+        studentIds, fromMonth: from, toMonth: to, charges: lines,
+      });
+      toast('success', `${data.created} charge${data.created === 1 ? '' : 's'} added across ${data.months} month${data.months === 1 ? '' : 's'}${data.skipped ? ` · ${data.skipped} skipped (already had monthly fee)` : ''}`);
+      setBulkLines([{ category: 'MONTHLY_FEE', description: '', amount: '', frequency: 'MONTHLY', perStudent: {} }]);
+      setBulkRange({ from: '', to: '' });
+      setShowBulkCharge(false);
+      loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to add charges');
+    } finally {
+      setBulkSaving(false);
     }
   };
 
@@ -2466,8 +2513,11 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                   <button onClick={() => { setShowDepositForm(!showDepositForm); setShowChargeForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
                     + Deposit
                   </button>
-                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
+                  <button onClick={() => { setShowChargeForm(!showChargeForm); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); setShowBulkCharge(false); }} className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700">
                     + Charge
+                  </button>
+                  <button onClick={() => { setShowBulkCharge(!showBulkCharge); setShowChargeForm(false); setShowDepositForm(false); setShowOpeningBalance(false); setShowKitForm(false); }} className="px-3 py-1.5 bg-orange-500 text-white rounded-lg text-sm hover:bg-orange-600">
+                    + Bulk Charges
                   </button>
                   <button onClick={() => showKitForm ? setShowKitForm(false) : openKitForm()} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
                     🛍️ Buy Kit
@@ -2714,22 +2764,48 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                   {/* Optional discount applied alongside the deposit */}
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                     <p className="text-xs font-semibold text-amber-800 mb-2">Discount (optional — concession/waiver, reduces balance but isn&apos;t cash)</p>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <label className="text-xs text-slate-600">
-                        Discount (₹)
-                        <input type="number" placeholder="0" value={depositForm.discount} onChange={e => setDepositForm({...depositForm, discount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
-                      </label>
-                      <label className="text-xs text-slate-600">
-                        Type
-                        <select value={depositForm.discountCategory} onChange={e => setDepositForm({...depositForm, discountCategory: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
-                          {[['SIBLING_DISCOUNT', 'Sibling'], ['MERIT_DISCOUNT', 'Merit'], ['FEE_WAIVER', 'Waiver'], ['AD_HOC', 'Other']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                      </label>
-                      <label className="text-xs text-slate-600">
-                        Reason {parseFloat(depositForm.discount) > 0 && <span className="text-red-500">*</span>}
-                        <input placeholder="e.g. sibling concession, approved by principal" value={depositForm.discountReason} onChange={e => setDepositForm({...depositForm, discountReason: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
-                      </label>
-                    </div>
+                    {ledgerFamily && (ledgerData?.siblings?.length || 0) > 1 ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-700">Choose which child gets a discount (leave others blank):</p>
+                        {ledgerData.siblings.map((sib: any) => (
+                          <div key={sib.id} className="flex items-center gap-3">
+                            <span className="text-sm text-slate-700 w-48 truncate">{sib.name} <span className="text-slate-400 text-xs">— {sib.class}</span></span>
+                            <input type="number" placeholder="₹ discount" value={discountPerSib[sib.id] || ''}
+                              onChange={e => setDiscountPerSib({ ...discountPerSib, [sib.id]: e.target.value })}
+                              className="w-32 px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </div>
+                        ))}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                          <label className="text-xs text-slate-600">
+                            Type
+                            <select value={depositForm.discountCategory} onChange={e => setDepositForm({...depositForm, discountCategory: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                              {[['SIBLING_DISCOUNT', 'Sibling'], ['MERIT_DISCOUNT', 'Merit'], ['FEE_WAIVER', 'Waiver'], ['AD_HOC', 'Other']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </label>
+                          <label className="text-xs text-slate-600">
+                            Reason {Object.values(discountPerSib).some(v => parseFloat(v) > 0) && <span className="text-red-500">*</span>}
+                            <input placeholder="e.g. sibling concession, approved by principal" value={depositForm.discountReason} onChange={e => setDepositForm({...depositForm, discountReason: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                          </label>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <label className="text-xs text-slate-600">
+                          Discount (₹)
+                          <input type="number" placeholder="0" value={depositForm.discount} onChange={e => setDepositForm({...depositForm, discount: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        </label>
+                        <label className="text-xs text-slate-600">
+                          Type
+                          <select value={depositForm.discountCategory} onChange={e => setDepositForm({...depositForm, discountCategory: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900">
+                            {[['SIBLING_DISCOUNT', 'Sibling'], ['MERIT_DISCOUNT', 'Merit'], ['FEE_WAIVER', 'Waiver'], ['AD_HOC', 'Other']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                          </select>
+                        </label>
+                        <label className="text-xs text-slate-600">
+                          Reason {parseFloat(depositForm.discount) > 0 && <span className="text-red-500">*</span>}
+                          <input placeholder="e.g. sibling concession, approved by principal" value={depositForm.discountReason} onChange={e => setDepositForm({...depositForm, discountReason: e.target.value})} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                        </label>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex justify-end gap-2">
@@ -2796,6 +2872,106 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                       </>
                     );
                   })()}
+                </form>
+              )}
+
+              {/* Bulk charges — multiple lines across a month range */}
+              {showBulkCharge && (
+                <form onSubmit={handleBulkCharge} className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-semibold text-orange-800">Bulk Charges</h3>
+                  {ledgerFamily && (ledgerData?.siblings?.length || 0) > 1 && (
+                    <p className="text-xs text-amber-700 bg-amber-100 rounded-lg px-3 py-2">⚠️ Family view — applies to all {ledgerData.siblings.length} children.</p>
+                  )}
+
+                  {/* Month range */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <label className="text-xs text-slate-600">
+                      From month
+                      <input type="month" value={bulkRange.from} onChange={e => setBulkRange({ ...bulkRange, from: e.target.value })} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" required />
+                    </label>
+                    <label className="text-xs text-slate-600">
+                      To month (optional)
+                      <input type="month" value={bulkRange.to} onChange={e => setBulkRange({ ...bulkRange, to: e.target.value })} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                    </label>
+                    <div className="col-span-2 flex items-end">
+                      <p className="text-xs text-slate-500">Leave &quot;To&quot; blank for a single month. Each charge line is added to every month in the range.</p>
+                    </div>
+                  </div>
+
+                  {/* Charge lines */}
+                  {(() => {
+                    const monthsCount = (() => {
+                      const f = bulkRange.from || currentMonth(); const t = bulkRange.to || f;
+                      if (t < f) return 0;
+                      let [y, m] = f.split('-').map(Number); const [ty, tm] = t.split('-').map(Number); let n = 0;
+                      while ((y < ty || (y === ty && m <= tm)) && n < 61) { n++; m++; if (m > 12) { m = 1; y++; } }
+                      return n;
+                    })();
+                    const isFamily = ledgerFamily && (ledgerData?.siblings?.length || 0) > 1;
+                    const sibs = isFamily ? ledgerData.siblings : [];
+                    const mult = (l: any) => (l.frequency === 'MONTHLY' ? monthsCount : 1);
+                    const grandTotal = bulkLines.reduce((s, l) => isFamily
+                      ? s + sibs.reduce((ss: number, sib: any) => ss + (parseFloat(l.perStudent[sib.id]) || 0) * mult(l), 0)
+                      : s + (parseFloat(l.amount) || 0) * mult(l), 0);
+                    return (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-orange-700">Charges:</p>
+                        {bulkLines.map((l, i) => (
+                          <div key={i} className="border border-orange-200 bg-white/60 rounded-lg p-2 space-y-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <select value={l.category} onChange={e => setBulkLines(bulkLines.map((x, j) => j === i ? { ...x, category: e.target.value, frequency: defaultFreq(e.target.value) } : x))}
+                                className="px-2 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 w-32">
+                                {['MONTHLY_FEE', 'ANNUAL', 'BOOK', 'DRESS', 'COPY', 'DAIRY', 'TIE_BELT', 'TRANSPORT', 'REGISTRATION', 'ADMISSION', 'EXAM_FEE', 'FINE', 'AD_HOC'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                              </select>
+                              <select value={l.frequency} onChange={e => setBulkLines(bulkLines.map((x, j) => j === i ? { ...x, frequency: e.target.value } : x))}
+                                title="Monthly = repeats each month in the range · One-time = charged once"
+                                className={`px-2 py-2 border rounded-lg text-xs w-24 ${l.frequency === 'MONTHLY' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-700'}`}>
+                                <option value="MONTHLY">Monthly</option>
+                                <option value="ONCE">One-time</option>
+                              </select>
+                              <input placeholder="description (optional)" value={l.description} onChange={e => setBulkLines(bulkLines.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                                className="flex-1 min-w-[120px] px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900" />
+                              {!isFamily && (
+                                <>
+                                  <input type="number" placeholder="₹" value={l.amount} onChange={e => setBulkLines(bulkLines.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                                    className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-right text-sm text-slate-900" />
+                                  <span className="text-[11px] text-slate-400 w-20 text-right">
+                                    {l.frequency === 'MONTHLY' ? `×${monthsCount} = ${formatCurrency((parseFloat(l.amount) || 0) * monthsCount)}` : 'once'}
+                                  </span>
+                                </>
+                              )}
+                              <button type="button" onClick={() => setBulkLines(bulkLines.length > 1 ? bulkLines.filter((_, j) => j !== i) : bulkLines)}
+                                className="p-1 text-red-500 hover:text-red-700 disabled:opacity-30 ml-auto" disabled={bulkLines.length === 1}><X className="h-4 w-4" /></button>
+                            </div>
+                            {isFamily && (
+                              <div className="flex gap-3 flex-wrap pl-1">
+                                {sibs.map((sib: any) => (
+                                  <label key={sib.id} className="text-[11px] text-slate-600 flex items-center gap-1">
+                                    {sib.name.split(' ')[0]} <span className="text-slate-400">({sib.class})</span>
+                                    <input type="number" placeholder="₹" value={l.perStudent[sib.id] || ''}
+                                      onChange={e => setBulkLines(bulkLines.map((x, j) => j === i ? { ...x, perStudent: { ...x.perStudent, [sib.id]: e.target.value } } : x))}
+                                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right text-sm text-slate-900" />
+                                  </label>
+                                ))}
+                                <span className="text-[10px] text-slate-400 self-center">{l.frequency === 'MONTHLY' ? `×${monthsCount} months` : 'once'}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between pt-1">
+                          <button type="button" onClick={() => setBulkLines([...bulkLines, { category: 'BOOK', description: '', amount: '', frequency: 'ONCE', perStudent: {} }])}
+                            className="text-xs text-orange-700 hover:underline">+ Add another charge</button>
+                          <span className="text-xs font-semibold text-orange-800">{isFamily ? 'Grand total' : 'Total per student'}: {formatCurrency(grandTotal)}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">Monthly fee repeats for each month in the range; one-time charges (books, annual…) once.{isFamily ? ' Enter each child’s amount — leave blank to skip that child.' : ''}</p>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setShowBulkCharge(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm">Cancel</button>
+                    <button type="submit" disabled={bulkSaving} className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700 disabled:opacity-50">{bulkSaving ? 'Adding…' : 'Add Charges'}</button>
+                  </div>
                 </form>
               )}
 
