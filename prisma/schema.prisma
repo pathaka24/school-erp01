@@ -335,6 +335,7 @@ model Student {
   scholarshipTxns    ScholarshipTransaction[]
   storeOrders        StoreOrder[]
   feeLedger          FeeLedger[]
+  feePromises        FeePromise[]
   monthlyReports     MonthlyReport[]
   classTestMarks     ClassTestMark[]
   messageThreads     MessageThread[]
@@ -912,10 +913,15 @@ model FeeLedger {
   voidedBy      String?  // user id or name
   voidReason    String?
 
+  // Archive — set aside (old/settled) without deleting; excluded from balance & totals, restorable
+  archivedAt    DateTime?
+  archivedBy    String?
+
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([studentId, month])
   @@index([studentId, voidedAt])
+  @@index([studentId, archivedAt])
   @@map("fee_ledger")
 }
 
@@ -950,6 +956,25 @@ model FeeLedgerAudit {
   @@index([entryId])
   @@index([studentId, createdAt])
   @@map("fee_ledger_audit")
+}
+
+// Promise-to-pay / follow-up log. When a defaulter's parent is called and says
+// "I'll pay on <date>", record it here with the promised date, amount and reason.
+model FeePromise {
+  id           String    @id @default(uuid())
+  studentId    String
+  promisedDate DateTime  @db.Date     // date the parent committed to pay
+  amount       Float?                 // amount they promised (optional)
+  reason       String?                // note / what they said
+  status       String    @default("PENDING") // PENDING, PAID, BROKEN, CANCELLED
+  createdBy    String?                // who logged the call
+  createdAt    DateTime  @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([status, promisedDate])
+  @@map("fee_promises")
 }
 
 model MonthlyReport {

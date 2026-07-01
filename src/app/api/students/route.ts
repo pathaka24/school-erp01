@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     // dues can be chased after they leave
     if (status === 'left' && students.length > 0) {
       const latest = await prisma.feeLedger.findMany({
-        where: { studentId: { in: students.map(s => s.id) }, voidedAt: null },
+        where: { studentId: { in: students.map(s => s.id) }, voidedAt: null, archivedAt: null },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         distinct: ['studentId'],
         select: { studentId: true, balanceAfter: true },

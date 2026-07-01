@@ -98,14 +98,38 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
   const { id } = await params;
   const sp = request.nextUrl.searchParams;
-  // ?archiveFees=true → also soft-archive (void) the student's fee ledger.
-  // Records stay recoverable; default keeps them untouched.
+  // ?archiveFees=true → also soft-archive the student's fee ledger.
+  // ?permanent=true   → HARD delete (admin only, student must already be left).
   const archiveFees = sp.get('archiveFees') === 'true';
+  const permanent = sp.get('permanent') === 'true';
   const leftReason = sp.get('reason') || null;
   const tcNumber = sp.get('tcNumber') || null;
 
-  const student = await prisma.student.findUnique({ where: { id } });
+  const student = await prisma.student.findUnique({
+    where: { id },
+    include: { user: { select: { isActive: true } } },
+  });
   if (!student) return Response.json({ error: 'Student not found' }, { status: 404 });
+
+  // Permanent removal — irreversible. Deleting the User cascades to the Student
+  // and all their required child records (fees, grades, attendance, …).
+  if (permanent) {
+    if (auth.role !== 'ADMIN') {
+      return Response.json({ error: 'Permanent delete requires an admin' }, { status: 403 });
+    }
+    if (student.user.isActive) {
+      return Response.json({ error: 'Mark the student as left first, then permanently delete.' }, { status: 400 });
+    }
+    try {
+      await prisma.user.delete({ where: { id: student.userId } });
+      return Response.json({ deleted: true });
+    } catch (e: any) {
+      if (e.code === 'P2003') {
+        return Response.json({ error: 'This student has linked records that block deletion.' }, { status: 409 });
+      }
+      return Response.json({ error: 'Failed to delete student: ' + e.message }, { status: 500 });
+    }
+  }
 
   let feesArchived = 0;
   if (archiveFees) {

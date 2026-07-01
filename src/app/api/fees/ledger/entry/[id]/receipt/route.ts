@@ -36,7 +36,7 @@ export async function GET(
   // Walk all non-voided entries chronologically up to and including this deposit
   // and replay FIFO to determine which charges this specific deposit paid against.
   const allEntries = await prisma.feeLedger.findMany({
-    where: { studentId: deposit.studentId, voidedAt: null },
+    where: { studentId: deposit.studentId, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
 
@@ -94,7 +94,7 @@ export async function GET(
 
   // Latest balance overall (including entries after this deposit)
   const latest = await prisma.feeLedger.findFirst({
-    where: { studentId: deposit.studentId, voidedAt: null },
+    where: { studentId: deposit.studentId, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     select: { balanceAfter: true },
   });

@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
   const groups = await prisma.feeLedger.groupBy({
     by: ['studentId'],
-    where: { type: 'CHARGE', category, voidedAt: null },
+    where: { type: 'CHARGE', category, voidedAt: null, archivedAt: null },
     _sum: { amount: true, paidAmount: true },
     _count: { id: true },
   });

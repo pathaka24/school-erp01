@@ -10,7 +10,7 @@ import {
   Calendar, BookOpen, Award, CreditCard, School, ChevronLeft, Menu,
   FileText, UsersRound, Sparkles, BarChart3, Printer, Shield, NotebookPen, IndianRupee, ShoppingBag, Settings,
   Home, QrCode, CalendarCheck, Sun, ClipboardCheck,
-  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen, TrendingUp, ArrowUpCircle, AlertTriangle, Cake,
+  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen, TrendingUp, ArrowUpCircle, AlertTriangle, Cake, Archive, UserMinus,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -41,16 +41,20 @@ const adminMenu = [
   { label: 'Admit Cards', href: '/admit-card', icon: CreditCard, scope: 'admitcard' },
   { label: 'ID Card Maker', href: '/id-maker', icon: CreditCard, scope: 'idcard' },
   { label: 'Grades', href: '/grades', icon: Award, scope: 'grades' },
+  { section: 'Fees & Finance' },
   { label: 'Fees', href: '/fees', icon: CreditCard, scope: 'fees' },
   { label: 'Register Entry', href: '/fees/register', icon: BookOpen, scope: 'fees' },
   { label: 'Dues / Late Payers', href: '/fees/dues', icon: AlertTriangle, scope: 'fees' },
+  { label: 'Left Students', href: '/fees/left', icon: UserMinus, scope: 'fees' },
   { label: 'Finance', href: '/finance', icon: IndianRupee, scope: 'finance' },
   { label: 'Store', href: '/store', icon: ShoppingBag, scope: 'store' },
-  { label: 'Family', href: '/family', icon: UsersRound, scope: 'family' },
   { label: 'Scholarship', href: '/scholarship', icon: Sparkles, scope: 'scholarship' },
-  { label: 'Fee Reports', href: '/fee-reports', icon: BarChart3, scope: 'reports' },
+  { label: 'Family', href: '/family', icon: UsersRound, scope: 'family' },
+  { section: 'Fee Reports' },
+  { label: 'Reports Home', href: '/fee-reports', icon: BarChart3, scope: 'reports' },
   { label: 'Collection Dashboard', href: '/fee-reports/dashboard', icon: TrendingUp, scope: 'reports' },
   { label: 'Fee Ledger Finance', href: '/fee-reports/ledger-finance', icon: IndianRupee, scope: 'reports' },
+  { label: 'Archived & Voided', href: '/fee-reports/archived', icon: Archive, scope: 'reports' },
   { label: 'Audit Log', href: '/fee-reports/audit-log', icon: Shield, scope: 'reports' },
   { label: 'Report Card', href: '/report-card', icon: Printer, scope: 'reportcard' },
   { label: 'Report Card Maker', href: '/report-card-maker', icon: FileText, scope: 'reportcard' },
@@ -200,6 +204,16 @@ export default function Sidebar() {
           animate="visible"
         >
           {menuItems.map((item) => {
+            // Section header (no href) — groups the items that follow it
+            if (item.section) {
+              return (
+                <div key={`sec-${item.section}`} className="px-5 pt-4 pb-1">
+                  {!collapsed
+                    ? <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{item.section}</p>
+                    : <div className="border-t border-slate-700/60 mx-1" />}
+                </div>
+              );
+            }
             const isDashboard = item.href === '/dashboard' || item.href === '/teacher/dashboard' || item.href === '/parent';
             const isActive = pathname === item.href || (!isDashboard && (pathname.startsWith(item.href + '/') || pathname.startsWith(item.href + '?')));
             return (

@@ -13,20 +13,34 @@ export async function POST(request: NextRequest) {
   if (auth instanceof Response) return auth;
 
   const body = await request.json();
-  const { studentIds, archiveFees } = body;
+  const { studentIds, archiveFees, permanent } = body;
   if (!Array.isArray(studentIds) || studentIds.length === 0) {
     return Response.json({ error: 'studentIds[] is required' }, { status: 400 });
-  }
-  if (studentIds.length > 500) {
-    return Response.json({ error: 'Too many at once. Limit 500 per call.' }, { status: 400 });
   }
 
   const students = await prisma.student.findMany({
     where: { id: { in: studentIds } },
-    select: { id: true, userId: true, user: { select: { firstName: true, lastName: true } } },
+    select: { id: true, userId: true, user: { select: { firstName: true, lastName: true, isActive: true } } },
   });
   if (students.length === 0) {
     return Response.json({ error: 'No matching students found' }, { status: 404 });
+  }
+
+  // Permanent (hard) delete — ADMIN only, and only students already marked left.
+  // Deleting the User cascades to the Student and all their required records.
+  if (permanent) {
+    if (auth.role !== 'ADMIN') {
+      return Response.json({ error: 'Permanent delete requires an admin' }, { status: 403 });
+    }
+    const inactive = students.filter(s => !s.user.isActive);
+    const skippedActive = students.length - inactive.length;
+    let deleted = 0;
+    const failed: string[] = [];
+    for (const s of inactive) {
+      try { await prisma.user.delete({ where: { id: s.userId } }); deleted++; }
+      catch { failed.push(s.id); }
+    }
+    return Response.json({ deleted, skippedActive, failed: failed.length });
   }
 
   const userIds = students.map(s => s.userId);

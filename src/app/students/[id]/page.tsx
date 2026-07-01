@@ -9,7 +9,7 @@ import { useAuthStore } from '@/lib/store';
 import { useFeedback } from '@/components/ui/feedback';
 import { formatDate, formatCurrency, getAcademicYears, getCurrentAcademicYear, compressImage } from '@/lib/utils';
 import PhotoCropper from '@/components/PhotoCropper';
-import { ArrowLeft, Save, User, Heart, MapPin, GraduationCap, School, History, Clock, Syringe, FileText, IndianRupee, Printer, BookOpen, CalendarCheck, Award, Camera, X, QrCode } from 'lucide-react';
+import { ArrowLeft, Save, User, Heart, MapPin, GraduationCap, School, History, Clock, Syringe, FileText, IndianRupee, Printer, BookOpen, CalendarCheck, Award, Camera, X, QrCode, Archive } from 'lucide-react';
 import QRCode from 'react-qr-code';
 
 const TABS = [
@@ -62,6 +62,7 @@ export default function StudentProfilePage() {
   const [bulkVoiding, setBulkVoiding] = useState(false);
   const [statementYear, setStatementYear] = useState<number | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
+  const [showArchived, setShowArchived] = useState(false); // archived-entries panel
   // Inline amount correction (click the number to fix it)
   const [inlineAmount, setInlineAmount] = useState<{ id: string; value: string } | null>(null);
   const [inlineAmountSaving, setInlineAmountSaving] = useState(false);
@@ -727,6 +728,63 @@ export default function StudentProfilePage() {
       toast('error', err.response?.data?.error || 'Failed to restore entry');
     } finally {
       setBusyEntryId(null);
+    }
+  };
+
+  // Archive = set aside (excluded from balance & totals) but kept and restorable.
+  const handleEntryArchive = async (entry: any) => {
+    const res = await confirmDialog({
+      title: `Archive this ${entry.type.toLowerCase()} of ${formatCurrency(entry.amount)}?`,
+      message: 'It is removed from the balance and totals, but kept in the Archived list and can be restored anytime.',
+      confirmLabel: 'Archive',
+    });
+    if (!res.confirmed) return;
+    setBusyEntryId(entry.id);
+    try {
+      await api.post('/fees/ledger/entry/archive', { ids: [entry.id], action: 'archive', actor: actorName });
+      toast('success', 'Entry archived');
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to archive entry');
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const handleEntryUnarchive = async (entry: any) => {
+    setBusyEntryId(entry.id);
+    try {
+      await api.post('/fees/ledger/entry/archive', { ids: [entry.id], action: 'restore', actor: actorName });
+      toast('success', 'Entry restored from archive');
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to restore entry');
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const handleBulkArchive = async () => {
+    const entries = (ledgerData?.entries || []).filter((e: any) => selectedEntries.has(e.id) && isEntryVoidable(e));
+    if (entries.length === 0) return;
+    const total = entries.reduce((s: number, e: any) => s + e.amount, 0);
+    const res = await confirmDialog({
+      title: `Archive ${entries.length} selected ${entries.length === 1 ? 'entry' : 'entries'}?`,
+      message: `Total ${formatCurrency(total)}. They are set aside from the balance and totals, kept in the Archived list, and restorable anytime.`,
+      confirmLabel: 'Archive selected',
+    });
+    if (!res.confirmed) return;
+    setBulkVoiding(true);
+    try {
+      await api.post('/fees/ledger/entry/archive', { ids: entries.map((e: any) => e.id), action: 'archive', actor: actorName });
+      toast('success', `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} archived`);
+      setSelectedEntries(new Set());
+      await loadLedger();
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to archive entries');
+      await loadLedger();
+    } finally {
+      setBulkVoiding(false);
     }
   };
 
@@ -3659,6 +3717,11 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                       <div className="flex items-center gap-2">
                         <button onClick={() => setSelectedEntries(new Set())} disabled={bulkVoiding}
                           className="px-3 py-1.5 text-xs bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 disabled:opacity-50">Clear</button>
+                        <button onClick={handleBulkArchive} disabled={bulkVoiding}
+                          className="px-3 py-1.5 text-xs font-semibold bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 flex items-center gap-1.5">
+                          {bulkVoiding && <span className="h-3 w-3 border-2 border-slate-300 border-t-white rounded-full animate-spin" />}
+                          {bulkVoiding ? 'Working…' : 'Archive selected'}
+                        </button>
                         <button onClick={handleBulkVoid} disabled={bulkVoiding}
                           className="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-1.5">
                           {bulkVoiding && <span className="h-3 w-3 border-2 border-red-200 border-t-white rounded-full animate-spin" />}
@@ -3798,6 +3861,8 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                                         )}
                                         <button onClick={() => setEditingEntry({ ...e, amount: String(e.amount) })}
                                           className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Edit</button>
+                                        <button onClick={() => handleEntryArchive(e)} title="Set aside — excluded from total, restorable"
+                                          className="px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200">Archive</button>
                                         <button onClick={() => handleEntryDelete(e)}
                                           className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">Void</button>
                                       </>
@@ -3815,6 +3880,60 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                     </table>
                   </div>
                 </div>
+                );
+              })()}
+
+              {/* Archived entries — set aside, excluded from every total above */}
+              {(ledgerData?.archivedEntries?.length || 0) > 0 && (() => {
+                const isFam = (ledgerData?.siblings?.length || 0) > 1;
+                return (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <button onClick={() => setShowArchived(!showArchived)} className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50">
+                      <span className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                        <Archive className="h-4 w-4 text-slate-500" /> Archived ({ledgerData.archivedEntries.length})
+                        <span className="text-xs font-normal text-slate-400">— not counted in the balance</span>
+                      </span>
+                      <span className="text-xs text-slate-400">{showArchived ? 'Hide' : 'Show'}</span>
+                    </button>
+                    {showArchived && (
+                      <div className="overflow-x-auto border-t border-slate-100">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                            <tr>
+                              {isFam && <th className="px-3 py-2 text-left">Student</th>}
+                              <th className="px-3 py-2 text-left">Date</th>
+                              <th className="px-3 py-2 text-left">Month</th>
+                              <th className="px-3 py-2 text-left">Description</th>
+                              <th className="px-3 py-2 text-right">Amount</th>
+                              <th className="px-3 py-2 text-left">Archived on</th>
+                              <th className="px-3 py-2 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {ledgerData.archivedEntries.map((e: any) => (
+                              <tr key={e.id} className="hover:bg-slate-50 text-slate-500">
+                                {isFam && <td className="px-3 py-2 text-xs">{e.student?.user ? `${e.student.user.firstName} ${e.student.user.lastName}` : ''}</td>}
+                                <td className="px-3 py-2">{e.date ? new Date(e.date).toLocaleDateString('en-IN') : '—'}</td>
+                                <td className="px-3 py-2">{e.month}</td>
+                                <td className="px-3 py-2 text-slate-600">{e.description}<span className="ml-1 text-[10px] uppercase text-slate-400">{e.type}</span></td>
+                                <td className={`px-3 py-2 text-right font-medium ${e.type === 'CHARGE' ? 'text-slate-600' : 'text-green-600'}`}>{e.type === 'CHARGE' ? '' : '− '}{formatCurrency(e.amount)}</td>
+                                <td className="px-3 py-2 text-xs text-slate-400">{e.archivedAt ? new Date(e.archivedAt).toLocaleDateString('en-IN') : ''}</td>
+                                <td className="px-3 py-2 text-right">
+                                  {busyEntryId === e.id
+                                    ? <span className="text-xs text-slate-400">…</span>
+                                    : <button onClick={() => handleEntryUnarchive(e)} className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Restore</button>}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex justify-between flex-wrap gap-1">
+                          <span>Archived charges {formatCurrency(ledgerData.archivedTotals?.charges || 0)} · credits {formatCurrency(ledgerData.archivedTotals?.credits || 0)}</span>
+                          <span className="text-slate-400">These are kept on record but excluded from the balance.</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })()}
 

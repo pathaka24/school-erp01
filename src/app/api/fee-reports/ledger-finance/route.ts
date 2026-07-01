@@ -2,6 +2,10 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { requireScope } from '@/lib/apiAuth';
 
+// Always compute live — never serve a cached snapshot (a void/edit elsewhere
+// must show up immediately).
+export const dynamic = 'force-dynamic';
+
 // GET /api/fee-reports/ledger-finance
 //
 // School-wide fee finance computed ENTIRELY from the FeeLedger (the real book):
@@ -15,12 +19,35 @@ export async function GET(request: NextRequest) {
   const auth = await requireScope(request, 'reports');
   if (auth instanceof Response) return auth;
 
-  const base = { voidedAt: null as null };
+  const base = { voidedAt: null as null, archivedAt: null as null };
+
+  // ── Academic-year scope ────────────────────────────────────────────────
+  // Activity metrics (billed/collected/discount/by-category/method/month/class)
+  // are scoped to the selected academic year (Apr→Mar). Position metrics
+  // (outstanding/advance/aging/counts) are an as-of-today snapshot, all-time.
+  const now = new Date();
+  const nowAY = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  const ayParam = parseInt(request.nextUrl.searchParams.get('ay') || '', 10);
+  const ay = Number.isFinite(ayParam) ? ayParam : nowAY;
+  const ayMonths: string[] = [];
+  for (let m = 4; m <= 12; m++) ayMonths.push(`${ay}-${String(m).padStart(2, '0')}`);
+  for (let m = 1; m <= 3; m++) ayMonths.push(`${ay + 1}-${String(m).padStart(2, '0')}`);
+  const monthFilter = { month: { in: ayMonths } };
+  // "YYYY-MM" strings sort lexicographically, so a string range = the AY window.
+  const ayStart = `${ay}-04`;
+  const ayEnd = `${ay + 1}-03`;
+
+  // Which academic years have any ledger data (for the year picker)
+  const monthsPresent = await prisma.feeLedger.findMany({ where: base, distinct: ['month'], select: { month: true } });
+  const aySet = new Set<number>();
+  for (const r of monthsPresent) { const [yy, mm] = r.month.split('-').map(Number); aySet.add(mm >= 4 ? yy : yy - 1); }
+  aySet.add(nowAY);
+  const availableYears = Array.from(aySet).sort((a, b) => b - a);
 
   const [chargedAgg, depositAgg, discountAgg, catRows, methodGroups, monthTypeGroups] = await Promise.all([
-    prisma.feeLedger.aggregate({ where: { ...base, type: 'CHARGE' }, _sum: { amount: true }, _count: { id: true } }),
-    prisma.feeLedger.aggregate({ where: { ...base, type: 'DEPOSIT' }, _sum: { amount: true }, _count: { id: true } }),
-    prisma.feeLedger.aggregate({ where: { ...base, type: 'DISCOUNT' }, _sum: { amount: true }, _count: { id: true } }),
+    prisma.feeLedger.aggregate({ where: { ...base, ...monthFilter, type: 'CHARGE' }, _sum: { amount: true }, _count: { id: true } }),
+    prisma.feeLedger.aggregate({ where: { ...base, ...monthFilter, type: 'DEPOSIT' }, _sum: { amount: true }, _count: { id: true } }),
+    prisma.feeLedger.aggregate({ where: { ...base, ...monthFilter, type: 'DISCOUNT' }, _sum: { amount: true }, _count: { id: true } }),
     // Per charge category: how many DISTINCT students bought it, quantity of items, total ₹
     prisma.$queryRaw<{ category: string | null; students: number; items: number; total: number }[]>`
       SELECT category,
@@ -28,11 +55,11 @@ export async function GET(request: NextRequest) {
              COUNT(*)::int AS items,
              SUM(amount)::float8 AS total
       FROM "fee_ledger"
-      WHERE "voidedAt" IS NULL AND type = 'CHARGE'
+      WHERE "voidedAt" IS NULL AND "archivedAt" IS NULL AND type = 'CHARGE' AND month >= ${ayStart} AND month <= ${ayEnd}
       GROUP BY category
     `,
-    prisma.feeLedger.groupBy({ by: ['paymentMethod'], where: { ...base, type: 'DEPOSIT' }, _sum: { amount: true }, _count: { id: true } }),
-    prisma.feeLedger.groupBy({ by: ['month', 'type'], where: base, _sum: { amount: true } }),
+    prisma.feeLedger.groupBy({ by: ['paymentMethod'], where: { ...base, ...monthFilter, type: 'DEPOSIT' }, _sum: { amount: true }, _count: { id: true } }),
+    prisma.feeLedger.groupBy({ by: ['month', 'type'], where: { ...base, ...monthFilter }, _sum: { amount: true } }),
   ]);
 
   const totalBilled = chargedAgg._sum.amount || 0;
@@ -50,7 +77,7 @@ export async function GET(request: NextRequest) {
   const outstandingRows = await prisma.$queryRaw<{ studentId: string; balanceAfter: number }[]>`
     SELECT DISTINCT ON ("studentId") "studentId", "balanceAfter"
     FROM "fee_ledger"
-    WHERE "voidedAt" IS NULL
+    WHERE "voidedAt" IS NULL AND "archivedAt" IS NULL
     ORDER BY "studentId", "date" DESC, "createdAt" DESC
   `;
   const totalOutstanding = outstandingRows.reduce((s, r) => s + Math.max(0, r.balanceAfter), 0);
@@ -65,7 +92,7 @@ export async function GET(request: NextRequest) {
     FROM "fee_ledger" fl
     JOIN "students" s ON s.id = fl."studentId"
     JOIN "classes" c ON c.id = s."classId"
-    WHERE fl."voidedAt" IS NULL
+    WHERE fl."voidedAt" IS NULL AND fl."archivedAt" IS NULL AND fl.month >= ${ayStart} AND fl.month <= ${ayEnd}
     GROUP BY c.id, c.name, fl.type
   `;
   // Per-class outstanding from latest balances + student→class map
@@ -93,8 +120,9 @@ export async function GET(request: NextRequest) {
     .map(c => ({ ...c, collectionRate: c.billed > 0 ? Math.round(((c.collected + c.discount) / c.billed) * 100) : 0 }))
     .sort((a, b) => b.outstanding - a.outstanding);
 
-  // Month-by-month billed vs collected
+  // Month-by-month billed vs collected — seed all 12 AY months so the chart is complete
   const monthMap = new Map<string, { month: string; billed: number; collected: number; discount: number }>();
+  for (const mo of ayMonths) monthMap.set(mo, { month: mo, billed: 0, collected: 0, discount: 0 });
   for (const g of monthTypeGroups) {
     if (!monthMap.has(g.month)) monthMap.set(g.month, { month: g.month, billed: 0, collected: 0, discount: 0 });
     const m = monthMap.get(g.month)!;
@@ -104,6 +132,25 @@ export async function GET(request: NextRequest) {
     else if (g.type === 'DISCOUNT') m.discount += amt;
   }
   const byMonth = Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
+
+  // ── Outstanding aging (as-of-today, all-time) ──────────────────────────
+  // Each unpaid CHARGE bucketed by how many months old it is vs the current month.
+  const dueCharges = await prisma.feeLedger.findMany({
+    where: { ...base, type: 'CHARGE' },
+    select: { month: true, amount: true, paidAmount: true },
+  });
+  const curIdx = now.getFullYear() * 12 + now.getMonth();
+  const aging = { current: 0, m1: 0, m23: 0, m4plus: 0 };
+  for (const c of dueCharges) {
+    const due = c.amount - c.paidAmount;
+    if (due <= 0.5) continue;
+    const [yy, mm] = c.month.split('-').map(Number);
+    const age = curIdx - (yy * 12 + (mm - 1));
+    if (age <= 0) aging.current += due;
+    else if (age === 1) aging.m1 += due;
+    else if (age <= 3) aging.m23 += due;
+    else aging.m4plus += due;
+  }
 
   const CAT_LABELS: Record<string, string> = {
     MONTHLY_FEE: 'Monthly Fee', ANNUAL: 'Annual', ADMISSION: 'Admission', REGISTRATION: 'Registration',
@@ -140,6 +187,9 @@ export async function GET(request: NextRequest) {
       discountCount: discountAgg._count.id,
     },
     counts: { students: outstandingRows.length, defaulters: defaulterCount, advance: advanceCount, clear: clearCount },
+    aging,
+    ay,
+    availableYears,
     byCategory,
     byMethod,
     byMonth,

@@ -71,7 +71,7 @@ export async function GET() {
 
     // ── Fee Collection This Month ──────────────────────────
     const monthDeposits = await prisma.feeLedger.aggregate({
-      where: { month: currentMonth, type: 'DEPOSIT', voidedAt: null },
+      where: { month: currentMonth, type: 'DEPOSIT', voidedAt: null, archivedAt: null },
       _sum: { amount: true },
       _count: { id: true },
     });
@@ -84,7 +84,7 @@ export async function GET() {
       FROM (
         SELECT DISTINCT ON ("studentId") "balanceAfter"
         FROM "fee_ledger"
-        WHERE "voidedAt" IS NULL
+        WHERE "voidedAt" IS NULL AND "archivedAt" IS NULL
         ORDER BY "studentId", "date" DESC, "createdAt" DESC
       ) sub
       WHERE sub."balanceAfter" > 0
@@ -93,7 +93,7 @@ export async function GET() {
 
     // Top 5 recent deposits with student name
     const recentDeposits = await prisma.feeLedger.findMany({
-      where: { type: 'DEPOSIT', voidedAt: null },
+      where: { type: 'DEPOSIT', voidedAt: null, archivedAt: null },
       orderBy: { createdAt: 'desc' },
       take: 5,
       include: {

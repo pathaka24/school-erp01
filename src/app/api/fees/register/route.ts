@@ -46,13 +46,13 @@ export async function GET(request: NextRequest) {
 
   // Existing entries for the requested month (excluding voided)
   const monthEntries = await prisma.feeLedger.findMany({
-    where: { studentId: { in: studentIds }, month, voidedAt: null },
+    where: { studentId: { in: studentIds }, month, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
 
   // Latest balance per student (use latest non-voided entry across all months)
   const latestPerStudent = await prisma.feeLedger.findMany({
-    where: { studentId: { in: studentIds }, voidedAt: null },
+    where: { studentId: { in: studentIds }, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     distinct: ['studentId'],
     select: { studentId: true, balanceAfter: true },

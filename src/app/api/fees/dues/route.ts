@@ -36,17 +36,17 @@ export async function GET(request: NextRequest) {
   const ids = students.map(s => s.id);
   const [latest, charges, lastDeposits] = await Promise.all([
     prisma.feeLedger.findMany({
-      where: { studentId: { in: ids }, voidedAt: null },
+      where: { studentId: { in: ids }, voidedAt: null, archivedAt: null },
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
       distinct: ['studentId'],
       select: { studentId: true, balanceAfter: true },
     }),
     prisma.feeLedger.findMany({
-      where: { studentId: { in: ids }, voidedAt: null, type: 'CHARGE' },
+      where: { studentId: { in: ids }, voidedAt: null, archivedAt: null, type: 'CHARGE' },
       select: { studentId: true, month: true, amount: true, paidAmount: true },
     }),
     prisma.feeLedger.findMany({
-      where: { studentId: { in: ids }, voidedAt: null, type: 'DEPOSIT' },
+      where: { studentId: { in: ids }, voidedAt: null, archivedAt: null, type: 'DEPOSIT' },
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
       distinct: ['studentId'],
       select: { studentId: true, date: true, amount: true },

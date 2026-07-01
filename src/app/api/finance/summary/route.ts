@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
   // Income now comes from the FeeLedger (the real book) — every non-voided
   // DEPOSIT is money actually collected. The legacy Payment table is retired.
   const [deposits, expenses, salaries, pendingSalaries] = await Promise.all([
-    prisma.feeLedger.findMany({ where: { type: 'DEPOSIT', voidedAt: null }, select: { amount: true, date: true } }),
+    prisma.feeLedger.findMany({ where: { type: 'DEPOSIT', voidedAt: null, archivedAt: null }, select: { amount: true, date: true } }),
     prisma.expense.findMany({ where: { academicYear } }),
     prisma.salary.findMany({ where: { status: 'PAID' } }),
     prisma.salary.findMany({ where: { status: 'PENDING' } }),

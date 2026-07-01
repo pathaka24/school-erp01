@@ -36,8 +36,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // (cash in), not by other discounts. Admin can override with allowUnpaid.
   if (!body.allowUnpaid) {
     const [monthlyFee, depositsAgg] = await Promise.all([
-      prisma.feeLedger.findFirst({ where: { studentId, month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null }, select: { amount: true } }),
-      prisma.feeLedger.aggregate({ where: { studentId, month, type: 'DEPOSIT', voidedAt: null }, _sum: { amount: true } }),
+      prisma.feeLedger.findFirst({ where: { studentId, month, type: 'CHARGE', category: 'MONTHLY_FEE', voidedAt: null, archivedAt: null }, select: { amount: true } }),
+      prisma.feeLedger.aggregate({ where: { studentId, month, type: 'DEPOSIT', voidedAt: null, archivedAt: null }, _sum: { amount: true } }),
     ]);
     const feeAmt = monthlyFee?.amount || 0;
     const paid = depositsAgg._sum.amount || 0;

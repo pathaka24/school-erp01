@@ -129,14 +129,30 @@ export async function GET(
 
   const includeVoided = request.nextUrl.searchParams.get('includeVoided') === 'true';
 
+  // Active (non-archived) entries — these drive the balance, monthly register
+  // and totals. Archived entries are fetched separately and shown on their own.
   const entries = await prisma.feeLedger.findMany({
     where: {
       studentId: { in: studentIds },
+      archivedAt: null,
       ...(includeVoided ? {} : { voidedAt: null }),
     },
     include: { student: { include: { user: { select: { firstName: true, lastName: true } } } } },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
+
+  // Archived entries — excluded from every total above; returned for the
+  // "Archived" list so they can be reviewed and restored.
+  const archivedEntries = await prisma.feeLedger.findMany({
+    where: { studentId: { in: studentIds }, archivedAt: { not: null }, voidedAt: null },
+    include: { student: { include: { user: { select: { firstName: true, lastName: true } } } } },
+    orderBy: [{ archivedAt: 'desc' }],
+  });
+  const archivedTotals = {
+    count: archivedEntries.length,
+    charges: archivedEntries.filter(e => e.type === 'CHARGE').reduce((s, e) => s + e.amount, 0),
+    credits: archivedEntries.filter(e => e.type !== 'CHARGE').reduce((s, e) => s + e.amount, 0),
+  };
 
   // Build monthly summary (like the physical register)
   const monthMap = new Map<string, {
@@ -249,6 +265,8 @@ export async function GET(
     totals,
     ledger: ledgerRows,
     entries, // raw entries for detailed view
+    archivedEntries, // set-aside entries, excluded from all totals above
+    archivedTotals,
     feeLockMonth: await getFeeLockMonth(), // months <= this are read-only
   });
 }

@@ -7,14 +7,14 @@ import { prisma } from '@/lib/db';
 //   - paidAmount:   for CHARGE rows, how much has been paid via FIFO from
 //                   subsequent deposits. For DEPOSIT rows, always 0.
 //
-// Voided entries are skipped entirely (their row stays in the DB with
-// voidedAt set; balances behave as if they never existed).
+// Voided AND archived entries are skipped entirely (the row stays in the DB
+// with voidedAt / archivedAt set; balances behave as if they never existed).
 //
-// Call this after every create / update / void on a student's ledger so the
-// stored fields stay consistent without recomputing on read.
+// Call this after every create / update / void / archive on a student's ledger
+// so the stored fields stay consistent without recomputing on read.
 export async function recomputeStudentLedger(studentId: string) {
   const entries = await prisma.feeLedger.findMany({
-    where: { studentId, voidedAt: null },
+    where: { studentId, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
 
@@ -91,69 +91,89 @@ function ledgerSnapshot(e: any) {
     amount: e.amount, month: e.month, date: e.date,
     paymentMethod: e.paymentMethod, receivedBy: e.receivedBy, receiptNumber: e.receiptNumber,
     voidedAt: e.voidedAt, voidedBy: e.voidedBy, voidReason: e.voidReason,
+    archivedAt: e.archivedAt, archivedBy: e.archivedBy,
   };
 }
 
-// Soft-archive a student's entire fee ledger by voiding every active entry.
-// Nothing is deleted — rows stay in the DB with voidedAt set, drop out of all
-// reports (which filter on voidedAt: null), and are recoverable via
-// restoreStudentLedger. Each void writes a VOID audit row. Used when a student
-// is deleted (opt-in) and from the finance dashboard's archive action.
+// Soft-archive a student's entire fee ledger — unified with the per-entry
+// archive: every active row gets archivedAt set (NOT voided). Rows stay in the
+// DB, drop out of all reports (which filter archivedAt: null), show on the
+// Archived Fees page, and are recoverable via restoreStudentLedger. Each writes
+// an ARCHIVE audit row. Used when a student leaves (opt-in) and from the
+// dashboard's archive action.
 export async function archiveStudentLedger(
   studentId: string,
   opts: { actor?: string; reason?: string } = {}
 ) {
   const actor = opts.actor || null;
-  const reason = `${ARCHIVE_VOID_TAG} ${opts.reason || 'Fee records archived'}`.trim();
-
   const active = await prisma.feeLedger.findMany({
-    where: { studentId, voidedAt: null },
+    where: { studentId, voidedAt: null, archivedAt: null },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   });
   if (active.length === 0) return { archived: 0, currentBalance: 0 };
 
   const now = new Date();
-  for (const e of active) {
-    const voided = await prisma.feeLedger.update({
-      where: { id: e.id },
-      data: { voidedAt: now, voidedBy: actor, voidReason: reason },
-    });
-    await writeFeeLedgerAudit({
-      entryId: e.id, studentId, action: 'VOID',
-      before: ledgerSnapshot(e), after: ledgerSnapshot(voided),
-      userName: actor || undefined, reason,
-    });
-  }
+  const ids = active.map(e => e.id);
+  const reason = opts.reason || 'Fee records archived (whole student)';
+  // Batch: one updateMany + one createMany (avoids per-row round-trips / tx timeouts)
+  await prisma.$transaction([
+    prisma.feeLedger.updateMany({ where: { id: { in: ids } }, data: { archivedAt: now, archivedBy: actor } }),
+    prisma.feeLedgerAudit.createMany({
+      data: active.map(e => ({
+        entryId: e.id, studentId, action: 'ARCHIVE',
+        before: JSON.stringify(ledgerSnapshot(e)),
+        after: JSON.stringify({ ...ledgerSnapshot(e), archivedAt: now, archivedBy: actor }),
+        userId: null, userName: actor, reason,
+      })),
+    }),
+  ]);
   const { balance } = await recomputeStudentLedger(studentId);
   return { archived: active.length, currentBalance: balance };
 }
 
-// Restore a previously archived ledger. Only un-voids entries that were voided
-// by an archive (tagged with ARCHIVE_VOID_TAG) — manually voided entries are
-// left untouched. Writes a RESTORE audit row per entry.
+// Restore a previously archived ledger. Un-archives archivedAt rows AND, for
+// backward compatibility, un-voids any legacy entries tagged with
+// ARCHIVE_VOID_TAG (the old whole-student archive). Manually voided entries are
+// left untouched.
 export async function restoreStudentLedger(
   studentId: string,
   opts: { actor?: string } = {}
 ) {
   const actor = opts.actor || null;
   const archived = await prisma.feeLedger.findMany({
+    where: { studentId, archivedAt: { not: null }, voidedAt: null },
+  });
+  const legacy = await prisma.feeLedger.findMany({
     where: { studentId, voidedAt: { not: null }, voidReason: { startsWith: ARCHIVE_VOID_TAG } },
   });
-  if (archived.length === 0) return { restored: 0, currentBalance: 0 };
+  if (archived.length === 0 && legacy.length === 0) return { restored: 0, currentBalance: 0 };
 
-  for (const e of archived) {
-    const restored = await prisma.feeLedger.update({
-      where: { id: e.id },
-      data: { voidedAt: null, voidedBy: null, voidReason: null },
-    });
-    await writeFeeLedgerAudit({
-      entryId: e.id, studentId, action: 'RESTORE',
-      before: ledgerSnapshot(e), after: ledgerSnapshot(restored),
-      userName: actor || undefined, reason: 'Fee records restored',
-    });
+  const ops: any[] = [];
+  if (archived.length) {
+    ops.push(prisma.feeLedger.updateMany({ where: { id: { in: archived.map(e => e.id) } }, data: { archivedAt: null, archivedBy: null } }));
+    ops.push(prisma.feeLedgerAudit.createMany({
+      data: archived.map(e => ({
+        entryId: e.id, studentId, action: 'UNARCHIVE',
+        before: JSON.stringify(ledgerSnapshot(e)),
+        after: JSON.stringify({ ...ledgerSnapshot(e), archivedAt: null, archivedBy: null }),
+        userId: null, userName: actor, reason: 'Fee records restored',
+      })),
+    }));
   }
+  if (legacy.length) {
+    ops.push(prisma.feeLedger.updateMany({ where: { id: { in: legacy.map(e => e.id) } }, data: { voidedAt: null, voidedBy: null, voidReason: null } }));
+    ops.push(prisma.feeLedgerAudit.createMany({
+      data: legacy.map(e => ({
+        entryId: e.id, studentId, action: 'RESTORE',
+        before: JSON.stringify(ledgerSnapshot(e)),
+        after: JSON.stringify({ ...ledgerSnapshot(e), voidedAt: null, voidedBy: null, voidReason: null }),
+        userId: null, userName: actor, reason: 'Fee records restored (legacy archive)',
+      })),
+    }));
+  }
+  await prisma.$transaction(ops);
   const { balance } = await recomputeStudentLedger(studentId);
-  return { restored: archived.length, currentBalance: balance };
+  return { restored: archived.length + legacy.length, currentBalance: balance };
 }
 
 // Write an audit row for a ledger entry change. Pass `db` to write inside an
@@ -162,7 +182,7 @@ export async function restoreStudentLedger(
 export async function writeFeeLedgerAudit(args: {
   entryId: string;
   studentId: string;
-  action: 'CREATE' | 'UPDATE' | 'VOID' | 'RESTORE';
+  action: 'CREATE' | 'UPDATE' | 'VOID' | 'RESTORE' | 'ARCHIVE' | 'UNARCHIVE';
   before?: any;
   after?: any;
   userId?: string;
