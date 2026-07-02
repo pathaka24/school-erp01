@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, getAcademicYears, getCurrentAcademicYear } from '@/lib/utils';
 import { useFeedback } from '@/components/ui/feedback';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
 import { AlertTriangle, Phone, IndianRupee, Users, RefreshCw, CalendarClock, Check, X, FileSpreadsheet, Printer, MessageCircle, FileText, Bell } from 'lucide-react';
@@ -16,6 +16,7 @@ function lateBadge(monthsLate: number) {
   return 'bg-slate-100 text-slate-600';
 }
 const dmy = (d: any) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+const mLabel = (m: string) => new Date(m + '-01').toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
 const todayKey = () => { const d = new Date(); return d.toISOString().slice(0, 10); };
 function promiseTone(p: any) {
   const today = todayKey();
@@ -30,7 +31,10 @@ function promiseTone(p: any) {
 
 export default function FeeDuesPage() {
   const { toast, confirm } = useFeedback();
-  const [view, setView] = useState<'dues' | 'followups'>('dues');
+  const [view, setView] = useState<'dues' | 'followups' | 'collection'>('dues');
+  const [collection, setCollection] = useState<any>(null);
+  const [colSession, setColSession] = useState(getCurrentAcademicYear());
+  const [colLoading, setColLoading] = useState(false);
   const [classes, setClasses] = useState<any[]>([]);
   const [classId, setClassId] = useState('');
   const [minMonths, setMinMonths] = useState('0');
@@ -85,7 +89,15 @@ export default function FeeDuesPage() {
       setPromises(data.promises || []);
     } catch { setPromises([]); }
   };
+  const loadCollection = async () => {
+    setColLoading(true);
+    try {
+      const { data } = await api.get('/fees/collection/monthly', { params: { session: colSession, classId: classId || undefined } });
+      setCollection(data);
+    } catch { setCollection(null); } finally { setColLoading(false); }
+  };
   useEffect(() => { load(); loadPromises(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [classId, minMonths]);
+  useEffect(() => { if (view === 'collection') loadCollection(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view, colSession, classId]);
 
   // Latest pending promise per student → shown on the dues row
   const promiseByStudent = new Map<string, any>();
@@ -267,6 +279,7 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
               <button onClick={() => setView('followups')} className={`px-3 py-1.5 text-sm rounded-md font-medium ${view === 'followups' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'}`}>
                 Follow-ups {promises.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px]">{promises.length}{overdueCount > 0 ? ` · ${overdueCount} overdue` : ''}</span>}
               </button>
+              <button onClick={() => setView('collection')} className={`px-3 py-1.5 text-sm rounded-md font-medium ${view === 'collection' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'}`}>Monthly Collection</button>
             </div>
             <button onClick={openBlankPromise} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 flex items-center gap-1.5">
               <CalendarClock className="h-4 w-4" /> Add follow-up
@@ -462,6 +475,100 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
                   </table>
                 )}
               </div>
+            </>
+          )}
+
+          {view === 'collection' && (
+            <>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <label className="text-xs text-slate-600 flex items-center gap-2">Session
+                  <select value={colSession} onChange={e => setColSession(e.target.value)} className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-900">
+                    {getAcademicYears().map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                  {classId && <span className="text-slate-400">· {classes.find((c: any) => c.id === classId)?.name}</span>}
+                </label>
+                {collection && <div className="text-sm text-slate-500">Collected <strong className="text-green-700">{formatCurrency(collection.totals.collected)}</strong> · {collection.totals.deposits} payments · billed {formatCurrency(collection.totals.billed)}</div>}
+              </div>
+
+              {colLoading ? (
+                <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-slate-400 text-sm">Loading…</div>
+              ) : !collection ? (
+                <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-slate-400 text-sm">No collection data for this session.</div>
+              ) : (
+                <>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-slate-700 mb-3">Cash collected by month — {collection.session}</h3>
+                    {(() => {
+                      const max = Math.max(1, ...collection.rows.map((r: any) => r.collected));
+                      const bw = 26, gap = 20, H = 140, pad = 8;
+                      const width = Math.max(collection.rows.length * (bw + gap) + pad * 2, 320);
+                      return (
+                        <div className="overflow-x-auto">
+                          <svg width={width} height={H + 26} className="block">
+                            {[0.25, 0.5, 0.75, 1].map(g => <line key={g} x1={0} x2={width} y1={H - H * g} y2={H - H * g} stroke="#f1f5f9" />)}
+                            {collection.rows.map((r: any, i: number) => {
+                              const x = i * (bw + gap) + pad; const h = Math.round((r.collected / max) * H);
+                              return (
+                                <g key={r.month}>
+                                  <rect x={x} y={H - h} width={bw} height={h} rx={3} fill="#22c55e"><title>{`${mLabel(r.month)}: ${formatCurrency(r.collected)} (${r.deposits} payments)`}</title></rect>
+                                  <text x={x + bw / 2} y={H + 14} textAnchor="middle" fontSize="9" fill="#94a3b8">{mLabel(r.month)}</text>
+                                </g>
+                              );
+                            })}
+                          </svg>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                          <tr><th className="px-3 py-2 text-left">Month</th><th className="px-3 py-2 text-right">Collected</th><th className="px-3 py-2 text-right">Payments</th><th className="px-3 py-2 text-right">Billed</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {collection.rows.map((r: any) => (
+                            <tr key={r.month} className={`hover:bg-slate-50 ${r.collected > 0 ? '' : 'text-slate-400'}`}>
+                              <td className="px-3 py-1.5 font-medium text-slate-800">{mLabel(r.month)}</td>
+                              <td className="px-3 py-1.5 text-right text-green-600 font-medium">{r.collected > 0 ? formatCurrency(r.collected) : '—'}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{r.deposits || '—'}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{r.billed > 0 ? formatCurrency(r.billed) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-slate-100 border-t-2 border-slate-300 font-bold text-slate-900">
+                            <td className="px-3 py-2">TOTAL</td>
+                            <td className="px-3 py-2 text-right text-green-700">{formatCurrency(collection.totals.collected)}</td>
+                            <td className="px-3 py-2 text-right">{collection.totals.deposits}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(collection.totals.billed)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-4">
+                      <h3 className="text-sm font-semibold text-slate-700 mb-3">Collected by method</h3>
+                      <div className="space-y-2.5">
+                        {collection.byMethod.map((m: any) => {
+                          const pct = collection.totals.collected > 0 ? Math.round((m.total / collection.totals.collected) * 100) : 0;
+                          return (
+                            <div key={m.method}>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-slate-700">{m.method.replace(/_/g, ' ')} <span className="text-xs text-slate-400">· {m.count}</span></span>
+                                <span className="font-semibold text-green-700">{formatCurrency(m.total)} <span className="text-xs text-slate-400 font-normal">{pct}%</span></span>
+                              </div>
+                              <div className="w-full bg-slate-100 rounded-full h-1.5 mt-1"><div className="h-1.5 rounded-full bg-green-400" style={{ width: `${pct}%` }} /></div>
+                            </div>
+                          );
+                        })}
+                        {collection.byMethod.length === 0 && <p className="text-sm text-slate-400">No collections this session.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
