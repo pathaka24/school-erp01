@@ -10,7 +10,7 @@ import {
   Calendar, BookOpen, Award, CreditCard, School, ChevronLeft, Menu,
   FileText, UsersRound, Sparkles, BarChart3, Printer, Shield, NotebookPen, IndianRupee, ShoppingBag, Settings,
   Home, QrCode, CalendarCheck, Sun, ClipboardCheck,
-  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen, TrendingUp, ArrowUpCircle, AlertTriangle, Cake, Archive, UserMinus,
+  Megaphone, MessageSquare, CalendarOff, Library, ShieldAlert, FileSpreadsheet, FolderOpen, TrendingUp, ArrowUpCircle, AlertTriangle, Cake, Archive, UserMinus, Wallet, CalendarRange, Grid3x3,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -43,8 +43,11 @@ const adminMenu = [
   { label: 'Grades', href: '/grades', icon: Award, scope: 'grades' },
   { section: 'Fees & Finance' },
   { label: 'Fees', href: '/fees', icon: CreditCard, scope: 'fees' },
+  { label: 'Student Fees', href: '/fees/student-fees', icon: Wallet, scope: 'fees' },
   { label: 'Register Entry', href: '/fees/register', icon: BookOpen, scope: 'fees' },
   { label: 'Dues / Late Payers', href: '/fees/dues', icon: AlertTriangle, scope: 'fees' },
+  { label: 'Monthly Dues', href: '/fees/dues/monthly', icon: CalendarRange, scope: 'fees' },
+  { label: 'Fee Tracker', href: '/fees/tracker', icon: Grid3x3, scope: 'fees' },
   { label: 'Left Students', href: '/fees/left', icon: UserMinus, scope: 'fees' },
   { label: 'Finance', href: '/finance', icon: IndianRupee, scope: 'finance' },
   { label: 'Store', href: '/store', icon: ShoppingBag, scope: 'store' },

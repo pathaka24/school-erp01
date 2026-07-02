@@ -250,6 +250,7 @@ model Student {
   parentId    String?
   familyId    String?
   feeExempt   Boolean  @default(false) // excluded from monthly fee generation (manual + cron)
+  monthlyFee  Float?   // per-student monthly fee override; null = use the class default from the fee plan
   leftReason  String?  // why the student left (TC issued, transferred, graduated…); user.deletedAt = left date
   tcNumber    String?  // transfer certificate number issued on leaving
   createdAt   DateTime @default(now())
@@ -336,6 +337,7 @@ model Student {
   storeOrders        StoreOrder[]
   feeLedger          FeeLedger[]
   feePromises        FeePromise[]
+  feeReminders       FeeReminder[]
   monthlyReports     MonthlyReport[]
   classTestMarks     ClassTestMark[]
   messageThreads     MessageThread[]
@@ -975,6 +977,23 @@ model FeePromise {
   @@index([studentId])
   @@index([status, promisedDate])
   @@map("fee_promises")
+}
+
+// Log of fee reminders sent to a parent (WhatsApp / letter / in-app notice / call)
+// so collection follow-up is trackable ("reminded 3×, no response").
+model FeeReminder {
+  id        String   @id @default(uuid())
+  studentId String
+  channel   String   // WHATSAPP, LETTER, NOTICE, CALL
+  amount    Float?   // outstanding at the time of the reminder
+  note      String?
+  sentBy    String?
+  sentAt    DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, sentAt])
+  @@map("fee_reminders")
 }
 
 model MonthlyReport {

@@ -557,6 +557,24 @@ export default function StudentProfilePage() {
     }
   };
 
+  const [monthlyFeeEdit, setMonthlyFeeEdit] = useState<string | null>(null);
+  const [savingMonthlyFee, setSavingMonthlyFee] = useState(false);
+  const saveMonthlyFee = async () => {
+    if (monthlyFeeEdit == null) return;
+    const v = monthlyFeeEdit.trim() === '' ? null : Number(monthlyFeeEdit);
+    setSavingMonthlyFee(true);
+    try {
+      await api.put(`/students/${id}`, { monthlyFee: v });
+      setStudent((prev: any) => ({ ...prev, monthlyFee: v }));
+      setMonthlyFeeEdit(null);
+      toast('success', v ? `Monthly fee set to ${formatCurrency(v)} — applies to future months` : 'Reverted to class default');
+    } catch (err: any) {
+      toast('error', err.response?.data?.error || 'Failed to update monthly fee');
+    } finally {
+      setSavingMonthlyFee(false);
+    }
+  };
+
   const handleEntrySave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEntry) return;
@@ -2502,7 +2520,25 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                       <p className="text-sm text-slate-500">Family: {ledgerData.student.familyName}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    {!student?.feeExempt && (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-600" title="This student's own monthly fee. Blank = use the class default. Applies to future months only.">
+                        <span>Monthly fee:</span>
+                        {monthlyFeeEdit == null ? (
+                          <button onClick={() => setMonthlyFeeEdit(student?.monthlyFee != null ? String(Math.round(student.monthlyFee)) : '')}
+                            className="px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700">
+                            {student?.monthlyFee != null ? formatCurrency(student.monthlyFee) : 'class default'} ✎
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <input type="number" autoFocus value={monthlyFeeEdit} onChange={e => setMonthlyFeeEdit(e.target.value)}
+                              placeholder="class default" className="w-28 px-2 py-1 border border-slate-300 rounded-md text-slate-900" />
+                            <button onClick={saveMonthlyFee} disabled={savingMonthlyFee} className="px-2 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">{savingMonthlyFee ? '…' : 'Save'}</button>
+                            <button onClick={() => setMonthlyFeeEdit(null)} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-md">✕</button>
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer"
                       title="When checked, this student is skipped by monthly fee generation (manual and automatic)">
                       <input type="checkbox" checked={!!student?.feeExempt} onChange={e => toggleFeeExempt(e.target.checked)} />
@@ -2523,6 +2559,8 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                   const paid = ledgerData?.totals?.totalDeposited || 0;
                   const discount = ledgerData?.totals?.totalDiscount || 0;
                   const balance = ledgerData?.currentBalance || 0;
+                  const sibs = ledgerData?.siblings || [];
+                  const isFam = ledgerFamily && sibs.length > 1; // combining siblings
                   const cm = currentMonth();
                   const ents = ledgerData?.entries || [];
                   const mCharge = ents.filter((e: any) => !e.voidedAt && e.type === 'CHARGE' && e.month === cm).reduce((s: number, e: any) => s + e.amount, 0);
@@ -2530,26 +2568,43 @@ th{background:#1e40af;color:#fff;padding:6px 8px;text-align:left;font-size:11px;
                   const mDue = mCharge - mPaid;
                   const cmLabel = new Date(cm + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
                   return (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <div className="rounded-lg border border-slate-200 p-3">
-                        <p className="text-xs text-slate-500">Total Billed</p>
-                        <p className="text-xl font-bold text-slate-900">{formatCurrency(billed)}</p>
+                    <div className="space-y-2">
+                      {isFam && (
+                        <div className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg px-3 py-1.5">
+                          <span className="font-semibold">Family total</span> — combining {sibs.length} children. Untick “Family view” to see this student alone.
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="rounded-lg border border-slate-200 p-3">
+                          <p className="text-xs text-slate-500">Total Billed{isFam ? ' (family)' : ''}</p>
+                          <p className="text-xl font-bold text-slate-900">{formatCurrency(billed)}</p>
+                        </div>
+                        <div className="rounded-lg border border-green-200 bg-green-50/50 p-3">
+                          <p className="text-xs text-slate-500">Total Paid{isFam ? ' (family)' : ''}</p>
+                          <p className="text-xl font-bold text-green-600">{formatCurrency(paid)}</p>
+                          {discount > 0 && <p className="text-[11px] text-violet-600">+ {formatCurrency(discount)} discount</p>}
+                        </div>
+                        <div className={`rounded-lg border p-3 ${balance > 0 ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
+                          <p className="text-xs text-slate-500">Balance Due{isFam ? ' (family)' : ''}</p>
+                          <p className={`text-xl font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(Math.max(0, balance))}</p>
+                          <p className={`text-[11px] ${balance > 0 ? 'text-red-500' : 'text-green-600'}`}>{balance > 0 ? 'Dues pending' : 'All cleared'}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 p-3">
+                          <p className="text-xs text-slate-500">This Month ({cmLabel}){isFam ? ' (family)' : ''}</p>
+                          <p className={`text-xl font-bold ${mDue > 0 ? 'text-amber-600' : 'text-green-600'}`}>{mDue > 0 ? formatCurrency(mDue) : 'Cleared'}</p>
+                          {mDue > 0 && <p className="text-[11px] text-amber-500">due this month</p>}
+                        </div>
                       </div>
-                      <div className="rounded-lg border border-green-200 bg-green-50/50 p-3">
-                        <p className="text-xs text-slate-500">Total Paid</p>
-                        <p className="text-xl font-bold text-green-600">{formatCurrency(paid)}</p>
-                        {discount > 0 && <p className="text-[11px] text-violet-600">+ {formatCurrency(discount)} discount</p>}
-                      </div>
-                      <div className={`rounded-lg border p-3 ${balance > 0 ? 'border-red-200 bg-red-50/50' : 'border-green-200 bg-green-50/50'}`}>
-                        <p className="text-xs text-slate-500">Balance Due</p>
-                        <p className={`text-xl font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(Math.max(0, balance))}</p>
-                        <p className={`text-[11px] ${balance > 0 ? 'text-red-500' : 'text-green-600'}`}>{balance > 0 ? 'Dues pending' : 'All cleared'}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 p-3">
-                        <p className="text-xs text-slate-500">This Month ({cmLabel})</p>
-                        <p className={`text-xl font-bold ${mDue > 0 ? 'text-amber-600' : 'text-green-600'}`}>{mDue > 0 ? formatCurrency(mDue) : 'Cleared'}</p>
-                        {mDue > 0 && <p className="text-[11px] text-amber-500">due this month</p>}
-                      </div>
+                      {isFam && (
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          {sibs.map((s: any) => (
+                            <span key={s.id} className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600">
+                              {s.name.split(' ')[0]} <span className="text-slate-400">({s.class})</span>: <strong className={`${(s.balance || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(Math.max(0, s.balance || 0))}</strong>
+                            </span>
+                          ))}
+                          <span className="px-2.5 py-1 text-slate-400">= {formatCurrency(Math.max(0, balance))} total</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

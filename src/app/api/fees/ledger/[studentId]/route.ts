@@ -27,11 +27,15 @@ async function getFeePlan() {
 // Idempotent + safe: skips fee-exempt students, no-ops if the class has no
 // monthly fee, and skips any month that already has a MONTHLY_FEE entry —
 // including a VOIDED one, so deliberately voided months aren't resurrected.
-async function ensureMonthlyFeesToDate(studentId: string, classId: string, feeExempt: boolean, admissionDate?: Date | null) {
+async function ensureMonthlyFeesToDate(studentId: string, classId: string, feeExempt: boolean, admissionDate?: Date | null, studentMonthlyFee?: number | null) {
   if (feeExempt) return;
-  const plan = await getFeePlan();
-  const classPlan = plan?.classes?.find((c: any) => c.classId === classId);
-  const monthlyFee = Number(classPlan?.monthlyFee) || 0;
+  // Per-student override wins; otherwise fall back to the class default.
+  let monthlyFee = studentMonthlyFee != null && studentMonthlyFee > 0 ? Number(studentMonthlyFee) : 0;
+  if (monthlyFee <= 0) {
+    const plan = await getFeePlan();
+    const classPlan = plan?.classes?.find((c: any) => c.classId === classId);
+    monthlyFee = Number(classPlan?.monthlyFee) || 0;
+  }
   if (monthlyFee <= 0) return;
 
   const now = new Date();
@@ -112,12 +116,12 @@ export async function GET(
   // Never for exempt or left (inactive) students — viewing a left student's
   // ledger to collect old dues must not generate new charges.
   if (student.user.isActive) {
-    await ensureMonthlyFeesToDate(student.id, student.classId, student.feeExempt, student.admissionDate);
+    await ensureMonthlyFeesToDate(student.id, student.classId, student.feeExempt, student.admissionDate, student.monthlyFee);
   }
   if (familyView && student.family) {
     for (const sib of student.family.students) {
       if (sib.id !== student.id && sib.user.isActive) {
-        await ensureMonthlyFeesToDate(sib.id, sib.class.id, sib.feeExempt, sib.admissionDate);
+        await ensureMonthlyFeesToDate(sib.id, sib.class.id, sib.feeExempt, sib.admissionDate, sib.monthlyFee);
       }
     }
   }
@@ -228,6 +232,14 @@ export async function GET(
   };
   totals.totalCharged = totals.totalMonthlyFees + totals.totalOtherCharges;
 
+  // Per-student net balance (from the active entries) so family view can show
+  // each child's share of the combined total.
+  const balByStudent = new Map<string, number>();
+  for (const e of entries) {
+    const cur = balByStudent.get(e.studentId) || 0;
+    balByStudent.set(e.studentId, cur + (e.type === 'CHARGE' ? e.amount : -e.amount));
+  }
+
   // Siblings info for family view
   const siblings = student.family
     ? student.family.students.map((s: any) => ({
@@ -235,6 +247,7 @@ export async function GET(
         name: `${s.user.firstName} ${s.user.lastName}`,
         class: s.class?.name,
         admissionNo: '',
+        balance: balByStudent.get(s.id) || 0,
       }))
     : [];
 

@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
   // Never auto-charge soft-deleted (deactivated) or fee-exempt students
   const students = await prisma.student.findMany({
     where: { user: { isActive: true }, feeExempt: false },
-    select: { id: true, classId: true },
+    select: { id: true, classId: true, monthlyFee: true },
   });
 
   const entryDate = new Date(month + '-01T00:00:00Z');
@@ -65,7 +65,8 @@ export async function GET(request: NextRequest) {
 
   const toCharge: { id: string; amount: number }[] = [];
   for (const s of students) {
-    const amount = monthlyFeeByClass.get(s.classId);
+    // Per-student override wins; otherwise the class default
+    const amount = s.monthlyFee != null && s.monthlyFee > 0 ? s.monthlyFee : monthlyFeeByClass.get(s.classId);
     if (!amount || alreadyCharged.has(s.id)) { skipped++; continue; }
     toCharge.push({ id: s.id, amount });
   }

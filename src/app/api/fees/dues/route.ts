@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
   if (students.length === 0) return Response.json({ rows: [], totals: { totalOutstanding: 0, studentCount: 0 } });
 
   const ids = students.map(s => s.id);
-  const [latest, charges, lastDeposits] = await Promise.all([
+  const [latest, charges, lastDeposits, reminders] = await Promise.all([
     prisma.feeLedger.findMany({
       where: { studentId: { in: ids }, voidedAt: null, archivedAt: null },
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -51,10 +51,17 @@ export async function GET(request: NextRequest) {
       distinct: ['studentId'],
       select: { studentId: true, date: true, amount: true },
     }),
+    prisma.feeReminder.groupBy({
+      by: ['studentId'],
+      where: { studentId: { in: ids } },
+      _count: { id: true },
+      _max: { sentAt: true },
+    }),
   ]);
 
   const balanceMap = new Map(latest.map(e => [e.studentId, e.balanceAfter]));
   const depositMap = new Map(lastDeposits.map(e => [e.studentId, e]));
+  const reminderMap = new Map(reminders.map(r => [r.studentId, { count: r._count.id, last: r._max.sentAt }]));
   const chargesByStudent = new Map<string, typeof charges>();
   for (const c of charges) {
     const list = chargesByStudent.get(c.studentId) || [];
@@ -80,6 +87,7 @@ export async function GET(request: NextRequest) {
     const monthsLate = oldestDueMonth ? Math.max(0, nowKey - monthKey(oldestDueMonth)) : 0;
     if (monthsLate < minMonths) continue;
     const lastDep = depositMap.get(s.id);
+    const rem = reminderMap.get(s.id);
 
     rows.push({
       studentId: s.id,
@@ -97,13 +105,43 @@ export async function GET(request: NextRequest) {
       hasPartial: due.some(c => c.paidAmount > 0.005),
       lastPaymentDate: lastDep?.date || null,
       lastPaymentAmount: lastDep?.amount ?? null,
+      lastReminderAt: rem?.last || null,
+      reminderCount: rem?.count || 0,
     });
   }
 
   rows.sort((a, b) => b.monthsLate - a.monthsLate || b.balance - a.balance);
 
+  // Aging buckets (oldest-first paidAmount is accurate) — over all in-scope charges
+  const nowIdx = now.getFullYear() * 12 + now.getMonth();
+  const aging = { current: 0, m1: 0, m23: 0, m4plus: 0 };
+  for (const c of charges) {
+    const dueAmt = c.amount - c.paidAmount;
+    if (dueAmt <= 0.5) continue;
+    const [yy, mm] = c.month.split('-').map(Number);
+    const age = nowIdx - (yy * 12 + (mm - 1));
+    if (age <= 0) aging.current += dueAmt;
+    else if (age === 1) aging.m1 += dueAmt;
+    else if (age <= 3) aging.m23 += dueAmt;
+    else aging.m4plus += dueAmt;
+  }
+
+  // Dues by class
+  const byClassMap = new Map<string, { name: string; outstanding: number; students: number }>();
+  for (const s of students) {
+    const bal = balanceMap.get(s.id) || 0;
+    if (bal <= 0.5) continue;
+    const cn = s.class?.name || '—';
+    const e = byClassMap.get(cn) || { name: cn, outstanding: 0, students: 0 };
+    e.outstanding += bal; e.students++;
+    byClassMap.set(cn, e);
+  }
+  const byClass = Array.from(byClassMap.values()).sort((a, b) => b.outstanding - a.outstanding);
+
   return Response.json({
     rows,
+    aging,
+    byClass,
     totals: {
       totalOutstanding: rows.reduce((t, r) => t + r.balance, 0),
       studentCount: rows.length,

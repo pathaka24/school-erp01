@@ -45,9 +45,9 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     'admissionDate', 'admittedGrade', 'house', 'stream', 'rollNumber',
     'prevSchoolName', 'prevSchoolBoard', 'prevLastGrade', 'prevTCNumber',
     'height', 'weight', 'vision', 'hearing', 'allergies', 'medicalConditions', 'disability',
-    'emergencyContactName', 'emergencyContactPhone', 'feeExempt',
+    'emergencyContactName', 'emergencyContactPhone', 'feeExempt', 'monthlyFee',
   ];
-  const numericFields = ['annualIncome', 'height', 'weight'];
+  const numericFields = ['annualIncome', 'height', 'weight', 'monthlyFee'];
   const dateFields = ['dateOfBirth', 'admissionDate'];
 
   const studentData: any = {};

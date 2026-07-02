@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
   const students = await prisma.student.findMany({
     where: studentWhere,
-    select: { id: true, classId: true, user: { select: { firstName: true, lastName: true } } },
+    select: { id: true, classId: true, monthlyFee: true, user: { select: { firstName: true, lastName: true } } },
   });
 
   if (students.length === 0) {
@@ -74,7 +74,8 @@ export async function POST(request: NextRequest) {
 
   const toCharge: { id: string; amount: number }[] = [];
   for (const s of students) {
-    const amount = monthlyFeeByClass.get(s.classId);
+    // Per-student override wins; otherwise the class default from the fee plan
+    const amount = s.monthlyFee != null && s.monthlyFee > 0 ? s.monthlyFee : monthlyFeeByClass.get(s.classId);
     if (!amount) {
       skipped++;
       skippedNoFee.push(`${s.user.firstName} ${s.user.lastName}`);

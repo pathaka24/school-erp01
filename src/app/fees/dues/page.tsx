@@ -7,7 +7,7 @@ import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useFeedback } from '@/components/ui/feedback';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { AlertTriangle, Phone, IndianRupee, Users, RefreshCw, CalendarClock, Check, X, FileSpreadsheet, Printer } from 'lucide-react';
+import { AlertTriangle, Phone, IndianRupee, Users, RefreshCw, CalendarClock, Check, X, FileSpreadsheet, Printer, MessageCircle, FileText, Bell } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 function lateBadge(monthsLate: number) {
@@ -36,7 +36,11 @@ export default function FeeDuesPage() {
   const [minMonths, setMinMonths] = useState('0');
   const [rows, setRows] = useState<any[]>([]);
   const [totals, setTotals] = useState<any>({ totalOutstanding: 0, studentCount: 0, threePlusMonths: 0 });
+  const [aging, setAging] = useState<any>(null);
+  const [byClass, setByClass] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [acting, setActing] = useState(false);
 
   // Promises (follow-ups)
   const [promises, setPromises] = useState<any[]>([]);
@@ -70,6 +74,9 @@ export default function FeeDuesPage() {
       const { data } = await api.get('/fees/dues', { params: { classId: classId || undefined, minMonths: minMonths || undefined } });
       setRows(data.rows || []);
       setTotals(data.totals || {});
+      setAging(data.aging || null);
+      setByClass(data.byClass || []);
+      setSel(new Set());
     } catch { setRows([]); } finally { setLoading(false); }
   };
   const loadPromises = async () => {
@@ -187,6 +194,58 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   };
 
+  // ── Reminders ──────────────────────────────────────────────────────────
+  const toggleSel = (id: string) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allSelected = rows.length > 0 && rows.every((r: any) => sel.has(r.studentId));
+  const reminderMsg = (r: any) =>
+    `Dear Parent, this is a reminder that ${formatCurrency(r.balance)} in fees is pending for ${r.name} (${r.className}${r.sectionName ? '-' + r.sectionName : ''})${r.monthsLate > 0 ? `, ${r.monthsLate} month${r.monthsLate === 1 ? '' : 's'} overdue` : ''}. Kindly clear the dues at your earliest convenience. Thank you.`;
+  const logReminder = async (ids: string[], channel: string) => {
+    try { await api.post('/fees/reminders', { studentIds: ids, channel }); } catch { /* non-blocking */ }
+  };
+  const whatsappRow = (r: any) => {
+    if (!r.phone) { toast('error', 'No phone number for this parent'); return; }
+    const digits = String(r.phone).replace(/\D/g, '');
+    const withCc = digits.length === 10 ? `91${digits}` : digits;
+    window.open(`https://wa.me/${withCc}?text=${encodeURIComponent(reminderMsg(r))}`, '_blank');
+    logReminder([r.studentId], 'WHATSAPP').then(() => load());
+  };
+  const notifyParents = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const res = await confirm({ title: `Send fee reminder to ${ids.length} parent${ids.length === 1 ? '' : 's'}?`, message: 'Posts an in-app "fees pending" message to each linked parent (visible in their portal) and logs the reminder.', confirmLabel: 'Send' });
+    if (!res.confirmed) return;
+    setActing(true);
+    try {
+      const { data } = await api.post('/fees/reminders', { studentIds: ids, channel: 'NOTICE' });
+      toast('success', `${data.logged} logged · ${data.messaged} parent message${data.messaged === 1 ? '' : 's'} sent`);
+      setSel(new Set());
+      load();
+    } catch (e: any) { toast('error', e.response?.data?.error || 'Failed to notify'); }
+    finally { setActing(false); }
+  };
+  const printLetters = (list: any[]) => {
+    if (list.length === 0) return;
+    const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+    const pages = list.map((r: any) => `<div style="page-break-after:always;padding:16px 8px">
+      <div style="text-align:right;color:#64748b;font-size:12px">${today}</div>
+      <h2 style="font-size:16px;margin:8px 0 2px">Fee Payment Reminder</h2>
+      <div style="font-size:12px;color:#64748b;margin-bottom:14px">${r.name} · ${r.admissionNo || ''} · Class ${r.className}${r.sectionName ? ' - ' + r.sectionName : ''}</div>
+      <p style="font-size:13px;line-height:1.6">Dear Parent / Guardian,</p>
+      <p style="font-size:13px;line-height:1.6">This is a gentle reminder that an amount of <strong>${formatCurrency(r.balance)}</strong> towards school fees is currently <strong>outstanding</strong> for your ward <strong>${r.name}</strong>${r.monthsLate > 0 ? `, pending for <strong>${r.monthsLate} month${r.monthsLate === 1 ? '' : 's'}</strong>` : ''}.</p>
+      <p style="font-size:13px;line-height:1.6">We request you to kindly clear the dues at the earliest to avoid any inconvenience. Please ignore this notice if payment has already been made.</p>
+      <table style="font-size:12px;border-collapse:collapse;margin:12px 0"><tr><td style="padding:3px 10px 3px 0;color:#64748b">Outstanding</td><td style="font-weight:700;color:#b91c1c">${formatCurrency(r.balance)}</td></tr>
+        <tr><td style="padding:3px 10px 3px 0;color:#64748b">Months overdue</td><td>${r.monthsLate}</td></tr>
+        <tr><td style="padding:3px 10px 3px 0;color:#64748b">Parent contact</td><td>${r.phone || '—'}</td></tr></table>
+      <p style="font-size:13px;line-height:1.6;margin-top:24px">Regards,<br/>Accounts Office</p>
+    </div>`).join('');
+    const html = `<!DOCTYPE html><html><head><title>Fee Reminder Letters</title>
+<style>body{font-family:Arial,sans-serif;margin:24px;color:#1e293b}</style></head><body>${pages}</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+    logReminder(list.map((r: any) => r.studentId), 'LETTER').then(() => load());
+    setSel(new Set());
+  };
+  const sinceDays = (d: any) => { if (!d) return null; return Math.floor((Date.now() - new Date(d).getTime()) / 86400000); };
+
   return (
     <DashboardLayout>
       <PageTransition>
@@ -232,6 +291,32 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
                 </div>
               </div>
 
+              {/* Aging + by-class */}
+              {aging && (totals.totalOutstanding || 0) > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-slate-600 mb-2">Outstanding aging</p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[['Current', aging.current, 'text-slate-700'], ['1 mo', aging.m1, 'text-amber-700'], ['2–3 mo', aging.m23, 'text-orange-700'], ['3+ mo', aging.m4plus, 'text-red-700']].map(([l, v, c]: any) => (
+                        <div key={l} className="text-center">
+                          <p className="text-[11px] text-slate-500">{l}</p>
+                          <p className={`text-sm font-bold ${c}`}>{formatCurrency(v)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-slate-600 mb-2">Dues by class</p>
+                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                      {byClass.slice(0, 16).map((c: any) => (
+                        <span key={c.name} className="px-2 py-0.5 rounded-lg bg-slate-100 text-xs text-slate-600">{c.name} <strong className="text-red-600">{formatCurrency(c.outstanding)}</strong> <span className="text-slate-400">·{c.students}</span></span>
+                      ))}
+                      {byClass.length === 0 && <span className="text-xs text-slate-400">No dues.</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Filters */}
               <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                 <label className="text-xs text-slate-600">Class
@@ -260,12 +345,23 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
 
               {/* Table */}
               <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+                {sel.size > 0 && (
+                  <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-200 flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-sm font-medium text-blue-800">{sel.size} selected</span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setSel(new Set())} className="px-3 py-1.5 text-xs bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50">Clear</button>
+                      <button onClick={() => printLetters(rows.filter((r: any) => sel.has(r.studentId)))} disabled={acting} className="px-3 py-1.5 text-xs bg-slate-700 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Print letters</button>
+                      <button onClick={() => notifyParents([...sel])} disabled={acting} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"><Bell className="h-3.5 w-3.5" /> Notify parents</button>
+                    </div>
+                  </div>
+                )}
                 {loading && <div className="text-center py-10 text-slate-400 text-sm">Loading…</div>}
                 {!loading && rows.length === 0 && <div className="text-center py-10 text-slate-400 text-sm">No dues match — everyone is paid up. 🎉</div>}
                 {!loading && rows.length > 0 && (
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
+                        <th className="px-3 py-2 w-8 text-center"><input type="checkbox" checked={allSelected} onChange={() => setSel(allSelected ? new Set() : new Set(rows.map((r: any) => r.studentId)))} /></th>
                         <th className="px-3 py-2 text-left">Student</th>
                         <th className="px-3 py-2 text-left">Class</th>
                         <th className="px-3 py-2 text-left">Parent / Phone</th>
@@ -279,8 +375,13 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
                       {rows.map((r: any) => {
                         const pr = promiseByStudent.get(r.studentId);
                         return (
-                          <tr key={r.studentId} className="hover:bg-slate-50">
-                            <td className="px-3 py-2"><div className="font-medium text-slate-900">{r.name}</div><div className="text-xs text-slate-400">{r.admissionNo}</div></td>
+                          <tr key={r.studentId} className={`hover:bg-slate-50 ${sel.has(r.studentId) ? 'bg-blue-50/40' : ''}`}>
+                            <td className="px-3 py-2 text-center"><input type="checkbox" checked={sel.has(r.studentId)} onChange={() => toggleSel(r.studentId)} /></td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium text-slate-900">{r.name}</div>
+                              <div className="text-xs text-slate-400">{r.admissionNo}</div>
+                              {r.reminderCount > 0 && <div className="text-[10px] text-amber-600">reminded {sinceDays(r.lastReminderAt) === 0 ? 'today' : `${sinceDays(r.lastReminderAt)}d ago`} ·{r.reminderCount}×</div>}
+                            </td>
                             <td className="px-3 py-2 text-slate-700">{r.className}{r.sectionName ? ` - ${r.sectionName}` : ''}</td>
                             <td className="px-3 py-2">
                               <div className="text-xs text-slate-700">{r.fatherName || '—'}</div>
@@ -297,6 +398,9 @@ tfoot td{background:#fee2e2;font-weight:bold}</style></head>
                             </td>
                             <td className="px-3 py-2 text-right">
                               <div className="flex gap-1 justify-end">
+                                <button onClick={() => whatsappRow(r)} title="Send WhatsApp reminder" className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-lg hover:bg-green-200 flex items-center gap-1">
+                                  <MessageCircle className="h-3 w-3" /> WA
+                                </button>
                                 <button onClick={() => openPromise(r.studentId, r.name, r.balance)} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-1">
                                   <CalendarClock className="h-3 w-3" /> {pr ? 'Update' : 'Follow-up'}
                                 </button>
