@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     SELECT DISTINCT ON ("studentId") "studentId", "balanceAfter"
     FROM "fee_ledger"
     WHERE "voidedAt" IS NULL AND "archivedAt" IS NULL
-    ORDER BY "studentId", "date" DESC, "createdAt" DESC
+    ORDER BY "studentId", "date" DESC, "createdAt" DESC, "id" DESC
   `;
   const owingRows = outstandingRows.filter(r => r.balanceAfter > 0);
   const totalOutstanding = owingRows.reduce((s, r) => s + r.balanceAfter, 0);

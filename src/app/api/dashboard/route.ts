@@ -85,7 +85,7 @@ export async function GET() {
         SELECT DISTINCT ON ("studentId") "balanceAfter"
         FROM "fee_ledger"
         WHERE "voidedAt" IS NULL AND "archivedAt" IS NULL
-        ORDER BY "studentId", "date" DESC, "createdAt" DESC
+        ORDER BY "studentId", "date" DESC, "createdAt" DESC, "id" DESC
       ) sub
       WHERE sub."balanceAfter" > 0
     `;

@@ -13,41 +13,42 @@ import { prisma } from '@/lib/db';
 // Call this after every create / update / void / archive on a student's ledger
 // so the stored fields stay consistent without recomputing on read.
 export async function recomputeStudentLedger(studentId: string) {
+  // Stable order (id tiebreak) so balanceAfter is deterministic even when a
+  // batch of entries shares the same date/createdAt.
   const entries = await prisma.feeLedger.findMany({
     where: { studentId, voidedAt: null, archivedAt: null },
-    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   });
 
-  // FIFO state
-  const chargeRemaining = new Map<string, number>(); // entryId -> remaining unpaid
-  const finalPaid = new Map<string, number>();       // entryId -> total paid (initially amount)
+  // Running balance (chronological) for balanceAfter, and gather charges + total credits.
   let balance = 0;
-
-  // Per-entry running balance
+  let totalCredits = 0;
+  const charges: typeof entries = [];
   const balanceUpdates: { id: string; balanceAfter: number }[] = [];
-
   for (const e of entries) {
     if (e.type === 'CHARGE') {
-      chargeRemaining.set(e.id, e.amount);
-      finalPaid.set(e.id, 0);
       balance += e.amount;
-    } else if (e.type === 'DEPOSIT' || e.type === 'DISCOUNT') {
-      // Both deposits and discounts reduce what the student owes.
-      // Discounts are applied FIFO too — they "pay off" the oldest charge first
-      // so the receipt makes sense ("discount applied against monthly fee").
-      let pool = e.amount;
-      for (const [chargeId, remaining] of chargeRemaining) {
-        if (pool <= 0) break;
-        if (remaining <= 0) continue;
-        const take = Math.min(pool, remaining);
-        chargeRemaining.set(chargeId, remaining - take);
-        finalPaid.set(chargeId, (finalPaid.get(chargeId) || 0) + take);
-        pool -= take;
-      }
+      charges.push(e);
+    } else {
+      // DEPOSIT or DISCOUNT — both reduce what's owed
       balance -= e.amount;
+      totalCredits += e.amount;
     }
-
     balanceUpdates.push({ id: e.id, balanceAfter: balance });
+  }
+
+  // paidAmount: apply the student's TOTAL credits to charges OLDEST-DEBT-FIRST
+  // (by fee month, then date). This correctly counts advance payments against
+  // future charges — so sum(amount − paidAmount) == the student's net balance,
+  // which keeps dues / aging / outstanding consistent everywhere.
+  const finalPaid = new Map<string, number>();
+  const sortedCharges = [...charges].sort((a, b) =>
+    a.month === b.month ? (a.date.getTime() - b.date.getTime()) : (a.month < b.month ? -1 : 1));
+  let pool = totalCredits;
+  for (const c of sortedCharges) {
+    const pay = Math.max(0, Math.min(pool, c.amount));
+    finalPaid.set(c.id, pay);
+    pool -= pay;
   }
 
   // Build the list of rows that actually changed

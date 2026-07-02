@@ -7,7 +7,8 @@ import api from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useFeedback } from '@/components/ui/feedback';
 import { PageTransition, FadeIn } from '@/components/ui/motion';
-import { AlertTriangle, Phone, IndianRupee, Users, RefreshCw, CalendarClock, Check, X } from 'lucide-react';
+import { AlertTriangle, Phone, IndianRupee, Users, RefreshCw, CalendarClock, Check, X, FileSpreadsheet, Printer } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 function lateBadge(monthsLate: number) {
   if (monthsLate >= 3) return 'bg-red-100 text-red-700';
@@ -130,6 +131,62 @@ export default function FeeDuesPage() {
   });
   const overdueCount = promises.filter(p => new Date(p.promisedDate).toISOString().slice(0, 10) < todayKey()).length;
 
+  // ── Exports ────────────────────────────────────────────────────────────
+  const exportRows = () => rows.map((r: any, i: number) => ({
+    '#': i + 1,
+    Student: r.name,
+    'Admission No': r.admissionNo || '',
+    Class: `${r.className || ''}${r.sectionName ? ' - ' + r.sectionName : ''}`,
+    Parent: r.fatherName || '',
+    Phone: r.phone || '',
+    'Months Late': r.monthsLate,
+    'Unpaid Months': r.unpaidMonths,
+    'Outstanding (₹)': Math.round(r.balance),
+    'Last Payment': r.lastPaymentDate ? new Date(r.lastPaymentDate).toLocaleDateString('en-IN') : '',
+    'Last Amount (₹)': r.lastPaymentAmount ? Math.round(r.lastPaymentAmount) : '',
+  }));
+
+  const exportExcel = () => {
+    if (rows.length === 0) { toast('error', 'Nothing to export'); return; }
+    const data = exportRows();
+    const ws = XLSX.utils.json_to_sheet(data);
+    // total row
+    XLSX.utils.sheet_add_json(ws, [{ Student: `TOTAL (${rows.length} students)`, 'Outstanding (₹)': Math.round(totals.totalOutstanding || 0) }], { skipHeader: true, origin: -1 });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dues');
+    XLSX.writeFile(wb, `dues-report-${todayKey()}.xlsx`);
+  };
+
+  const exportPDF = () => {
+    if (rows.length === 0) { toast('error', 'Nothing to export'); return; }
+    const body = rows.map((r: any, i: number) => `<tr>
+      <td>${i + 1}</td>
+      <td>${r.name}<div style="color:#94a3b8;font-size:10px">${r.admissionNo || ''}</div></td>
+      <td>${r.className || ''}${r.sectionName ? ' - ' + r.sectionName : ''}</td>
+      <td>${r.fatherName || ''}<div style="color:#64748b;font-size:10px">${r.phone || ''}</div></td>
+      <td style="text-align:center">${r.monthsLate === 0 ? 'current' : r.monthsLate + ' mo'}</td>
+      <td style="text-align:center">${r.unpaidMonths}</td>
+      <td style="text-align:right;font-weight:600;color:#dc2626">${formatCurrency(r.balance)}</td>
+    </tr>`).join('');
+    const html = `<!DOCTYPE html><html><head><title>Dues &amp; Late Payers</title>
+<style>body{font-family:Arial,sans-serif;margin:22px;color:#1e293b;font-size:12px}
+h1{font-size:18px;color:#b91c1c;margin:0}.sub{font-size:12px;color:#64748b;margin:2px 0 14px}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #e2e8f0;padding:5px 8px;text-align:left}
+th{background:#b91c1c;color:#fff;font-size:11px;text-transform:uppercase}
+tfoot td{background:#fee2e2;font-weight:bold}</style></head>
+<body>
+  <h1>Dues &amp; Late Payers</h1>
+  <div class="sub">${rows.length} students · Total outstanding ${formatCurrency(totals.totalOutstanding || 0)} · Printed ${new Date().toLocaleDateString('en-IN')}</div>
+  <table>
+    <thead><tr><th>#</th><th>Student</th><th>Class</th><th>Parent / Phone</th><th style="text-align:center">Late</th><th style="text-align:center">Unpaid</th><th style="text-align:right">Outstanding</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><td colspan="6">TOTAL (${rows.length} students)</td><td style="text-align:right">${formatCurrency(totals.totalOutstanding || 0)}</td></tr></tfoot>
+  </table>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  };
+
   return (
     <DashboardLayout>
       <PageTransition>
@@ -188,9 +245,15 @@ export default function FeeDuesPage() {
                     <option value="0">Any dues</option><option value="1">1 month</option><option value="2">2 months</option><option value="3">3 months</option><option value="6">6 months</option>
                   </select>
                 </label>
-                <div className="flex items-end">
+                <div className="flex items-end gap-2 flex-wrap">
                   <button onClick={() => { load(); loadPromises(); }} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200 flex items-center gap-2">
                     <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+                  </button>
+                  <button onClick={exportExcel} disabled={rows.length === 0} className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4" /> Excel
+                  </button>
+                  <button onClick={exportPDF} disabled={rows.length === 0} className="px-3 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 disabled:opacity-50 flex items-center gap-2">
+                    <Printer className="h-4 w-4" /> PDF
                   </button>
                 </div>
               </div>

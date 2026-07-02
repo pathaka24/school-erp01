@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
   const [latest, charges, lastDeposits] = await Promise.all([
     prisma.feeLedger.findMany({
       where: { studentId: { in: ids }, voidedAt: null, archivedAt: null },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       distinct: ['studentId'],
       select: { studentId: true, balanceAfter: true },
     }),
